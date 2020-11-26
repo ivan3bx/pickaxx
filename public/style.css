@@ -1,0 +1,8 @@
+#chat-box {
+ height: 350px;
+ overflow-y: scroll;
+ min-width: 350px;
+ border-width: 1;
+ font-family: "Source Code Pro", Monaco, monospace;
+ font-size: small;
+}

@@ -1,0 +1,91 @@
+<html>
+
+<head>
+    <script src="assets/reconnecting-websocket.min.js"></script>
+    <link rel="stylesheet" href="assets/style.css">
+
+    <script type="text/javascript">
+        document.addEventListener("DOMContentLoaded", function () {
+            var item = document.getElementById("chat-box");
+            item.scrollTop = item.scrollHeight;
+        });
+
+        function startServer() {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/start', true);
+            xhr.onload = function () {
+                console.log(this.responseText);
+            };
+            xhr.onreadystatechange = function () {
+                if (this.readyState == 4 && this.status > 399) {
+                    logError(this.responseText);
+                }
+            }
+            xhr.send("");
+        };
+
+        function stopServer() {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/stop', true);
+            xhr.onload = function () {
+                console.log(this.responseText);
+            };
+            xhr.onreadystatechange = function () {
+                if (this.readyState == 4 && this.status > 399) {
+                    logError(this.responseText);
+                }
+            }
+            xhr.send("");
+        };
+
+        function logError(errText) {
+            var item = document.getElementById("chat-box");
+            item.innerHTML = item.innerHTML + "<span>Error: " + (errText || 'Network request failed') + "</span><br/>";
+            item.scrollTop = item.scrollHeight;
+        }
+
+        if (window["WebSocket"]) {
+            conn = new ReconnectingWebSocket("ws://" + document.location.host + "/ws");
+            conn.onclose = function (event) {
+                var item = document.getElementById("status");
+                item.innerText = "unknown"
+            }
+            conn.onmessage = function (event) {
+                var data = JSON.parse(event.data)
+
+                if (data.status !== undefined) {
+                    var item = document.getElementById("status");
+                    item.innerText = data.status;
+                }
+                if (data.output !== undefined) {
+                    var item = document.getElementById("chat-box");
+                    item.innerHTML = item.innerHTML + "<span>" + data.output + "</span><br/>"
+                    item.scrollTop = item.scrollHeight;
+                }
+            }
+        }
+    </script>
+</head>
+
+<body>
+    <h1>Pickaxx</h1>
+    <ul>
+        <li>Server Status: <span id="status">-</span> </li>
+    </ul>
+
+    <h2>Actions</h2>
+    <form action=""></form>
+    <ul>
+        <li><input type="button" value="Start Server" onclick="startServer();"></li>
+        <li><input type="button" value="Stop Server" onclick="stopServer();"></li>
+    </ul>
+    <hr />
+
+    <div id="chat-box">
+        {{ range $line := .logLines }}
+        <span>{{ $line }}</span><br />
+        {{ end }}
+    </div>
+</body>
+
+</html>
