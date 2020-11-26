@@ -27,8 +27,11 @@ const (
 	JarFile = "server.jar"
 )
 
-// ErrProcessStart exists when a new server process can not be started.
-var ErrProcessStart = errors.New("unable to start new process")
+// ErrProcessExists exists when a new server process can not be started.
+var ErrProcessExists = errors.New("unable to start new process")
+
+// ErrNoProcess occurs when no process exists to take an action on
+var ErrNoProcess = errors.New("no process running")
 
 // Manager manages one or more Minecraft servers.
 type Manager interface {
@@ -36,7 +39,7 @@ type Manager interface {
 	Run()
 	AddClient(*websocket.Conn)
 	StartServer() error
-	StopServer()
+	StopServer() error
 }
 
 // NewServerManager creates a new instance of a server manager.
@@ -110,7 +113,7 @@ func (m *serverManager) StartServer() error {
 	m.status <- "starting"
 
 	if m.Active() {
-		return fmt.Errorf("server already running: %w", ErrProcessStart)
+		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
 
 	ctx := log.NewContext(context.Background(), log.WithField("action", "runloop"))
@@ -177,14 +180,16 @@ func (m *serverManager) captureOutput(src io.Reader) {
 	}
 }
 
-func (m *serverManager) StopServer() {
+func (m *serverManager) StopServer() error {
 	if m.process == nil {
 		log.Warn("Server not running. No process found.")
-		return
+		return ErrNoProcess
 	}
 
 	m.status <- "stopping"
 	m.stop <- true
+
+	return nil
 }
 
 func (m *serverManager) Run() {
