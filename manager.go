@@ -30,14 +30,18 @@ const (
 // ErrProcessExists exists when a new server process can not be started.
 var ErrProcessExists = errors.New("unable to start new process")
 
-// ErrNoProcess occurs when no process exists to take an action on
+// ErrNoProcess occurs when no process exists to take an action on.
 var ErrNoProcess = errors.New("no process running")
+
+// ErrInvalidClient occurs when a client is not valid.
+var ErrInvalidClient = errors.New("client not valid")
 
 // Manager manages one or more Minecraft servers.
 type Manager interface {
 	Active() bool
 	Run()
-	AddClient(*websocket.Conn)
+	AddClient(*websocket.Conn) Client
+	RemoveClient(Client) error
 	StartServer() error
 	StopServer() error
 }
@@ -49,35 +53,38 @@ func NewServerManager() Manager {
 			current: Unknown,
 			update:  make(chan ServerState),
 		},
-		output:     make(chan []byte, 10),
-		register:   make(chan *client),
-		unregister: make(chan *client),
-		clients:    make(map[*client]bool),
+		output:  make(chan []byte, 10),
+		clients: make(map[*client]bool),
 	}
 }
 
 type serverManager struct {
-	state ManagedState
-	// stop       chan bool
-	// status     chan string
-	output     chan []byte
-	register   chan *client
-	unregister chan *client
-
-	killServerFunc context.CancelFunc
-
-	clients clients
+	state   ManagedState
+	clients ClientPool
+	output  chan []byte
 	console io.Writer
-	process *os.Process
+
+	process        *os.Process
+	killServerFunc context.CancelFunc
 }
 
-func (m *serverManager) AddClient(conn *websocket.Conn) {
+func (m *serverManager) AddClient(conn *websocket.Conn) Client {
 	cl := &client{
 		manager: m,
 		conn:    conn,
 	}
 
-	m.register <- cl
+	m.clients.Add(cl)
+
+	return cl
+}
+
+func (m *serverManager) RemoveClient(arg Client) error {
+	if obj, ok := arg.(*client); ok {
+		delete(m.clients, obj)
+		return nil
+	}
+	return ErrInvalidClient
 }
 
 // TODO put this in a goroutine; poll status every 500ms and send
@@ -195,25 +202,24 @@ func (m *serverManager) StopServer() error {
 
 func (m *serverManager) Run() {
 	for {
-		clients := m.clients
-
 		select {
-		case client := <-m.register:
-			clients.Add(client)
-		case client := <-m.unregister:
-			clients.Remove(client)
 		case status := <-m.state.update:
 			m.state.Lock()
 			m.state.current = status
 			m.state.Unlock()
 
-			clients.broadcast(gin.H{
+			m.broadcast(gin.H{
 				"status": status.String(),
 			})
 		case output := <-m.output:
-			clients.broadcast(gin.H{
+			m.broadcast(gin.H{
 				"output": string(output),
 			})
 		}
 	}
+}
+
+func (m *serverManager) broadcast(obj gin.H) {
+	clients := m.clients
+	clients.broadcast(obj)
 }
