@@ -16,7 +16,9 @@ func main() {
 	go manager.Run()
 
 	// start web server
-	e := gin.Default()
+	e := gin.New()
+	e.Use(gin.Logger(), gin.Recovery())
+
 	e.Static("/assets", "public")
 	e.LoadHTMLFiles("templates/index.html")
 

@@ -11,7 +11,7 @@ import (
 	"github.com/ivan3bx/pickaxx"
 )
 
-// ErrSystem reflects a non-recoverable system error
+// ErrSystem reflects za non-recoverable system error
 var ErrSystem = errors.New("system error")
 
 var upgrader = websocket.Upgrader{
@@ -31,7 +31,10 @@ func rootHandler(c *gin.Context) {
 		lines = strings.Split(string(content), "\n")
 	}
 
-	c.HTML(http.StatusOK, "index.html", gin.H{"logLines": lines})
+	c.HTML(http.StatusOK, "index.html", gin.H{
+		"logLines": lines,
+		"status":   pickaxx.Unknown,
+	})
 }
 
 func webSocketHandler(c *gin.Context) {
@@ -57,7 +60,7 @@ func startServerHandler(c *gin.Context) {
 		var status int
 		var message string
 
-		if err == pickaxx.ErrProcessExists {
+		if errors.Is(err, pickaxx.ErrProcessExists) {
 			status = http.StatusBadRequest
 			message = "server already running"
 		} else {

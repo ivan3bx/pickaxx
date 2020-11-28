@@ -45,24 +45,26 @@ type Manager interface {
 // NewServerManager creates a new instance of a server manager.
 func NewServerManager() Manager {
 	return &serverManager{
-		status:     make(chan string),
+		state: ManagedState{
+			current: Unknown,
+			update:  make(chan ServerState),
+		},
 		output:     make(chan []byte, 10),
 		register:   make(chan *client),
 		unregister: make(chan *client),
 		clients:    make(map[*client]bool),
-
-		// TODO: this channel should be cleared on server startup or shutdown
-		// gets invoked if 'stop' button pressed before 'start'
-		stop: make(chan bool),
 	}
 }
 
 type serverManager struct {
-	stop       chan bool
-	status     chan string
+	state ManagedState
+	// stop       chan bool
+	// status     chan string
 	output     chan []byte
 	register   chan *client
 	unregister chan *client
+
+	killServerFunc context.CancelFunc
 
 	clients clients
 	console io.Writer
@@ -78,43 +80,18 @@ func (m *serverManager) AddClient(conn *websocket.Conn) {
 	m.register <- cl
 }
 
-func startShutdownRoutine(ctx context.Context, cancel context.CancelFunc, m *serverManager) {
-	log := log.FromContext(ctx).WithField("action", "cancelRoutine")
-
-	select {
-	case <-ctx.Done():
-		log.Debug("context already marked done")
-	case <-m.stop:
-		go cancelWithDeadline(ctx, cancel, time.Second*10)
-		m.console.Write([]byte("/stop\n"))
-		m.process.Wait()
-		cancel()
-	}
-}
-
-func cancelWithDeadline(ctx context.Context, cancel context.CancelFunc, limit time.Duration) {
-	log := log.FromContext(ctx).WithField("action", "cancelWithDeadline")
-	timer := time.NewTimer(limit)
-
-	select {
-	case <-timer.C:
-		log.Debug("timer expired")
-		cancel()
-	case <-ctx.Done():
-		log.Debug("no action needed")
-	}
-}
-
+// TODO put this in a goroutine; poll status every 500ms and send
+// a state update through state manager if process died.
 func (m *serverManager) Active() bool {
 	return m.process != nil && m.process.Signal(syscall.Signal(0)) == nil
 }
 
 func (m *serverManager) StartServer() error {
-	m.status <- "starting"
-
-	if m.Active() {
+	if m.state.current == Started {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
+
+	m.state.update <- Starting
 
 	ctx := log.NewContext(context.Background(), log.WithField("action", "runloop"))
 	ctx, cancel := context.WithCancel(ctx)
@@ -123,7 +100,7 @@ func (m *serverManager) StartServer() error {
 	cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
 	cmd.Dir = "testserver"
 
-	go startShutdownRoutine(ctx, cancel, m)
+	m.killServerFunc = cancel
 
 	var (
 		cmdIn  io.Writer
@@ -156,7 +133,8 @@ func (m *serverManager) StartServer() error {
 	go m.captureOutput(cmdOut)
 	go m.captureOutput(cmdErr)
 
-	m.status <- "running"
+	m.state.update <- Started
+
 	return nil
 }
 
@@ -181,13 +159,36 @@ func (m *serverManager) captureOutput(src io.Reader) {
 }
 
 func (m *serverManager) StopServer() error {
-	if m.process == nil {
+	if !m.Active() {
 		log.Warn("Server not running. No process found.")
 		return ErrNoProcess
 	}
 
-	m.status <- "stopping"
-	m.stop <- true
+	m.state.update <- Stopping
+
+	// set timer to force shutdown if clean shutdown stalls
+	go func() {
+		timer := time.NewTimer(time.Second * 10)
+
+		select {
+		case <-timer.C:
+			if m.state.current != Stopped {
+				log.Debug("timer expired. stopping server.")
+				m.killServerFunc()
+				m.process = nil
+				m.state.update <- Stopped
+			}
+		}
+	}()
+
+	// attempt clean shutdown
+	go func() {
+		m.console.Write([]byte("/stop\n"))
+		m.process.Wait()
+		m.killServerFunc()
+		m.process = nil
+		m.state.update <- Stopped
+	}()
 
 	return nil
 }
@@ -201,9 +202,13 @@ func (m *serverManager) Run() {
 			clients.Add(client)
 		case client := <-m.unregister:
 			clients.Remove(client)
-		case status := <-m.status:
+		case status := <-m.state.update:
+			m.state.Lock()
+			m.state.current = status
+			m.state.Unlock()
+
 			clients.broadcast(gin.H{
-				"status": status,
+				"status": status.String(),
 			})
 		case output := <-m.output:
 			clients.broadcast(gin.H{
