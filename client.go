@@ -1,33 +1,55 @@
 package pickaxx
 
-import "github.com/gorilla/websocket"
+import (
+	"encoding/json"
+	"io"
+	"sync"
 
-// Client describes a user currently interacting with the system.
-type Client interface {
+	"github.com/gorilla/websocket"
+)
+
+type websocketClient struct {
+	*websocket.Conn
 }
 
-type client struct {
-	manager *serverManager
-	conn    *websocket.Conn
+var _ io.Writer = &ClientManager{}
+
+// ClientManager is a collection of clients
+type ClientManager struct {
+	sync.Mutex
+	pool map[*websocketClient]bool
 }
 
-// ClientPool is a collection of clients
-type ClientPool map[*client]bool
-
-//Add will add a client to the pool. If the Client already exists, no change occurs.
-func (c ClientPool) Add(newClient *client) {
-	c[newClient] = true
-}
-
-//Remove will remove a client to the pool. If the Client does not exist, no change occurs.
-func (c ClientPool) Remove(client *client) {
-	if _, ok := c[client]; ok {
-		delete(c, client)
+// AddClient adds a new client to this manager
+func (c *ClientManager) AddClient(conn *websocket.Conn) {
+	c.Lock()
+	if c.pool == nil {
+		c.pool = map[*websocketClient]bool{}
 	}
+	c.Unlock()
+
+	client := websocketClient{conn}
+	c.pool[&client] = true
 }
 
-func (c ClientPool) broadcast(data map[string]interface{}) {
-	for client := range c {
-		client.conn.WriteJSON(data)
+func (c *ClientManager) Write(data []byte) (int, error) {
+	var (
+		holder map[string]string
+	)
+
+	// Send well-formed JSON as-is or wrap it as generic 'output'
+	if err := json.Unmarshal(data, &holder); err != nil {
+		holder = map[string]string{"output": string(data)}
 	}
+
+	return len(data), c.broadcast(holder)
+}
+
+func (c *ClientManager) broadcast(data interface{}) error {
+	for client := range c.pool {
+		if err := client.WriteJSON(data); err != nil {
+			return err
+		}
+	}
+	return nil
 }

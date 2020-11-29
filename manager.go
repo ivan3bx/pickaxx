@@ -11,9 +11,6 @@ import (
 	"time"
 
 	"github.com/apex/log"
-
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
 
 const (
@@ -36,55 +33,35 @@ var ErrNoProcess = errors.New("no process running")
 // ErrInvalidClient occurs when a client is not valid.
 var ErrInvalidClient = errors.New("client not valid")
 
-// Manager manages one or more Minecraft servers.
-type Manager interface {
+// ServerManager manages an instance of Minecraft server.
+type ServerManager interface {
 	Active() bool
-	Run()
-	AddClient(*websocket.Conn) Client
-	RemoveClient(Client) error
 	StartServer() error
 	StopServer() error
 }
 
-// NewServerManager creates a new instance of a server manager.
-func NewServerManager() Manager {
+// NewServerManager creates a new instance of a server manager, and sends all output to the given writer.
+func NewServerManager(w io.Writer) ServerManager {
 	return &serverManager{
 		state: ManagedState{
 			current: Unknown,
 			update:  make(chan ServerState),
 		},
-		output:  make(chan []byte, 10),
-		clients: make(map[*client]bool),
+		writer:      w,
+		stopRunLoop: make(chan bool),
 	}
 }
 
 type serverManager struct {
-	state   ManagedState
-	clients ClientPool
-	output  chan []byte
-	console io.Writer
+	// internal run-loop
+	stopRunLoop chan bool
 
+	// process management
+	state          ManagedState
+	console        io.Writer
 	process        *os.Process
+	writer         io.Writer
 	killServerFunc context.CancelFunc
-}
-
-func (m *serverManager) AddClient(conn *websocket.Conn) Client {
-	cl := &client{
-		manager: m,
-		conn:    conn,
-	}
-
-	m.clients.Add(cl)
-
-	return cl
-}
-
-func (m *serverManager) RemoveClient(arg Client) error {
-	if obj, ok := arg.(*client); ok {
-		delete(m.clients, obj)
-		return nil
-	}
-	return ErrInvalidClient
 }
 
 // TODO put this in a goroutine; poll status every 500ms and send
@@ -97,6 +74,8 @@ func (m *serverManager) StartServer() error {
 	if m.state.current == Started {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
+
+	go m.runLoop()
 
 	m.state.update <- Starting
 
@@ -152,7 +131,7 @@ func (m *serverManager) captureOutput(src io.Reader) {
 		n, err := src.Read(buf[:])
 		if n > 0 {
 			data := buf[:n]
-			m.output <- data
+			m.writer.Write(data)
 		}
 		if err != nil {
 			if err == io.EOF {
@@ -200,26 +179,19 @@ func (m *serverManager) StopServer() error {
 	return nil
 }
 
-func (m *serverManager) Run() {
+// runLoop will execute until it is 'stopped' via the 'stopLoop' channel.
+func (m *serverManager) runLoop() {
 	for {
 		select {
+		case <-m.stopRunLoop:
+			return
 		case status := <-m.state.update:
 			m.state.Lock()
 			m.state.current = status
 			m.state.Unlock()
 
-			m.broadcast(gin.H{
-				"status": status.String(),
-			})
-		case output := <-m.output:
-			m.broadcast(gin.H{
-				"output": string(output),
-			})
+			jsonString := fmt.Sprintf(`{"status":"%s"}`, status.String())
+			m.writer.Write([]byte(jsonString))
 		}
 	}
-}
-
-func (m *serverManager) broadcast(obj gin.H) {
-	clients := m.clients
-	clients.broadcast(obj)
 }

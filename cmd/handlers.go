@@ -37,20 +37,20 @@ func rootHandler(c *gin.Context) {
 	})
 }
 
-func webSocketHandler(c *gin.Context) {
-	var (
-		conn *websocket.Conn
-		err  error
-	)
+func webSocketHandler(cm *pickaxx.ClientManager) func(c *gin.Context) {
+	return func(c *gin.Context) {
+		var (
+			conn *websocket.Conn
+			err  error
+		)
 
-	manager := getServerManager(c)
+		if conn, err = upgrader.Upgrade(c.Writer, c.Request, nil); err != nil {
+			c.AbortWithError(http.StatusInternalServerError, err)
+			return
+		}
 
-	if conn, err = upgrader.Upgrade(c.Writer, c.Request, nil); err != nil {
-		c.AbortWithError(http.StatusInternalServerError, err)
-		return
+		cm.AddClient(conn)
 	}
-
-	manager.AddClient(conn)
 }
 
 func startServerHandler(c *gin.Context) {
@@ -74,6 +74,7 @@ func startServerHandler(c *gin.Context) {
 
 func stopServerHandler(c *gin.Context) {
 	manager := getServerManager(c)
+
 	if err := manager.StopServer(); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
 	}

@@ -11,9 +11,9 @@ func main() {
 	log.SetLevel(log.DebugLevel)
 	log.SetHandler(cli.Default)
 
-	// start the server manager
-	manager := pickaxx.NewServerManager()
-	go manager.Run()
+	// start a new manager
+	clientManager := pickaxx.ClientManager{}
+	manager := pickaxx.NewServerManager(&clientManager)
 
 	// start web server
 	e := gin.New()
@@ -22,10 +22,11 @@ func main() {
 	e.Static("/assets", "public")
 	e.LoadHTMLFiles("templates/index.html")
 
+	e.GET("/ws", webSocketHandler(&clientManager))
+
 	routes := e.Group("/", managerMiddleware(manager))
 	{
 		routes.GET("/", rootHandler)
-		routes.GET("/ws", webSocketHandler)
 		routes.POST("/start", startServerHandler)
 		routes.POST("/stop", stopServerHandler)
 	}
