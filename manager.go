@@ -37,27 +37,19 @@ var ErrInvalidClient = errors.New("client not valid")
 type ServerManager interface {
 	Active() bool
 	StartServer() error
-	StopServer() error
+	StopServer(context.Context) error
 }
 
 // NewServerManager creates a new instance of a server manager, and sends all output to the given writer.
 func NewServerManager(w io.Writer) ServerManager {
 	return &serverManager{
-		state: ManagedState{
-			current: Unknown,
-			update:  make(chan ServerState),
-		},
-		writer:      w,
-		stopRunLoop: make(chan bool),
+		state:  Unknown,
+		writer: w,
 	}
 }
 
 type serverManager struct {
-	// internal run-loop
-	stopRunLoop chan bool
-
-	// process management
-	state          ManagedState
+	state          ServerState
 	console        io.Writer
 	process        *os.Process
 	writer         io.Writer
@@ -71,15 +63,13 @@ func (m *serverManager) Active() bool {
 }
 
 func (m *serverManager) StartServer() error {
-	if m.state.current == Started {
+	if m.state == Started {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
 
-	go m.runLoop()
+	m.updateState(Starting)
 
-	m.state.update <- Starting
-
-	ctx := log.NewContext(context.Background(), log.WithField("action", "runloop"))
+	ctx := log.NewContext(context.Background(), log.WithField("action", "startServer"))
 	ctx, cancel := context.WithCancel(ctx)
 	log := log.FromContext(ctx)
 
@@ -119,7 +109,7 @@ func (m *serverManager) StartServer() error {
 	go m.captureOutput(cmdOut)
 	go m.captureOutput(cmdErr)
 
-	m.state.update <- Started
+	m.updateState(Started)
 
 	return nil
 }
@@ -144,54 +134,43 @@ func (m *serverManager) captureOutput(src io.Reader) {
 	}
 }
 
-func (m *serverManager) StopServer() error {
+func (m *serverManager) StopServer(ctx context.Context) error {
 	if !m.Active() {
-		log.Warn("Server not running. No process found.")
 		return ErrNoProcess
 	}
 
-	m.state.update <- Stopping
+	m.updateState(Stopping)
 
 	// set timer to force shutdown if clean shutdown stalls
 	go func() {
 		timer := time.NewTimer(time.Second * 10)
 
 		select {
+		case <-ctx.Done():
+			log.Debug("context marked as done")
 		case <-timer.C:
-			if m.state.current != Stopped {
-				log.Debug("timer expired. stopping server.")
-				m.killServerFunc()
-				m.process = nil
-				m.state.update <- Stopped
-			}
+			log.Debug("timer deadline expired")
 		}
-	}()
 
-	// attempt clean shutdown
-	go func() {
-		m.console.Write([]byte("/stop\n"))
-		m.process.Wait()
 		m.killServerFunc()
 		m.process = nil
-		m.state.update <- Stopped
+		m.updateState(Stopped)
 	}()
+
+	log.Info("clean shutdown starting..")
+	m.console.Write([]byte("/stop\n"))
+	if _, err := m.process.Wait(); err != nil {
+		log.WithError(err).Warn("clean shutdown failed with error")
+	}
+	m.process = nil
+	m.updateState(Stopped)
+	log.Info("clean shutdown completed")
 
 	return nil
 }
 
-// runLoop will execute until it is 'stopped' via the 'stopLoop' channel.
-func (m *serverManager) runLoop() {
-	for {
-		select {
-		case <-m.stopRunLoop:
-			return
-		case status := <-m.state.update:
-			m.state.Lock()
-			m.state.current = status
-			m.state.Unlock()
-
-			jsonString := fmt.Sprintf(`{"status":"%s"}`, status.String())
-			m.writer.Write([]byte(jsonString))
-		}
-	}
+func (m *serverManager) updateState(newState ServerState) {
+	m.state = newState
+	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
+	m.writer.Write([]byte(jsonString))
 }

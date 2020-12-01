@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io/ioutil"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -75,7 +77,10 @@ func startServerHandler(c *gin.Context) {
 func stopServerHandler(c *gin.Context) {
 	manager := getServerManager(c)
 
-	if err := manager.StopServer(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+
+	if err := manager.StopServer(ctx); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
 	}
 }
