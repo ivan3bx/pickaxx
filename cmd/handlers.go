@@ -15,9 +15,6 @@ import (
 	"github.com/ivan3bx/pickaxx"
 )
 
-// ErrSystem reflects za non-recoverable system error
-var ErrSystem = errors.New("system error")
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,

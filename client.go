@@ -1,6 +1,7 @@
 package pickaxx
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"sync"
@@ -18,32 +19,32 @@ var _ io.Writer = &ClientManager{}
 // ClientManager is a collection of clients
 type ClientManager struct {
 	sync.Mutex
-	output chan []byte
-	pool   map[string]*websocketClient
+	initialized bool
+	output      chan map[string]interface{}
+	pool        map[string]*websocketClient
 }
 
 func (c *ClientManager) initialize() {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.pool == nil {
-		c.pool = map[string]*websocketClient{}
+	if c.initialized {
+		return
 	}
 
-	if c.output == nil {
-		// start run loop for broadcasting to clients
-		c.output = make(chan []byte, 1)
+	c.pool = map[string]*websocketClient{}
+	c.output = make(chan map[string]interface{}, 1)
 
-		go func() {
-			for {
-				select {
-				case data := <-c.output:
-					c.broadcast(data)
-				}
+	go func() {
+		for {
+			if val := <-c.output; val != nil {
+				c.broadcast(val)
+				continue
 			}
-		}()
-	}
+		}
+	}()
 
+	c.initialized = true
 }
 
 // AddClient adds a new client to this manager
@@ -57,24 +58,28 @@ func (c *ClientManager) AddClient(conn *websocket.Conn) {
 // operation must write to a channel, as writes to an underlying
 // websocket can not happen concurrently.
 func (c *ClientManager) Write(data []byte) (int, error) {
-	c.output <- data
+	holder := map[string]interface{}{}
+
+	// Send well-formed JSON as-is or wrap it as generic 'output'
+	if err := json.Unmarshal(data, &holder); err != nil {
+		holder = map[string]interface{}{"output": string(data)}
+	}
+
+	c.output <- holder
 	return len(data), nil
 }
 
-func (c *ClientManager) broadcast(data interface{}) error {
-	if byteData, ok := data.([]byte); ok {
-		holder := map[string]string{}
+func (c *ClientManager) broadcast(data map[string]interface{}) error {
+	buf := bytes.Buffer{}
 
-		// Send well-formed JSON as-is or wrap it as generic 'output'
-		if err := json.Unmarshal(byteData, &holder); err != nil {
-			holder = map[string]string{"output": string(byteData)}
-		}
-
-		data = holder
+	if err := json.NewEncoder(&buf).Encode(&data); err != nil {
+		return err
 	}
 
 	for remoteAddr, client := range c.pool {
-		if err := client.WriteJSON(data); err != nil {
+		err := client.WriteMessage(websocket.TextMessage, buf.Bytes())
+
+		if err != nil {
 			log.WithField("remoteAddr", remoteAddr).Warn("client disconnected")
 			delete(c.pool, remoteAddr)
 			return err

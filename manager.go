@@ -1,6 +1,7 @@
 package pickaxx
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -153,22 +154,11 @@ func (m *ProcessManager) Stop(ctx context.Context) error {
 }
 
 func (m *ProcessManager) captureOutput(src io.Reader) {
-	buf := make([]byte, 1024, 1024)
+	s := bufio.NewScanner(src)
+	w := m.writer
 
-	for {
-		n, err := src.Read(buf[:])
-		if n > 0 {
-			data := buf[:n]
-			m.writer.Write(data)
-		}
-		if err != nil {
-			if err == io.EOF {
-				return
-			}
-
-			log.WithError(err).Error("read/write failed")
-			return
-		}
+	for s.Scan() {
+		w.Write(s.Bytes())
 	}
 }
 

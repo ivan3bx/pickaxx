@@ -44,7 +44,7 @@ func main() {
 	srv := startWebServer(e)
 
 	// shutdown on interrupt
-	quit := make(chan os.Signal)
+	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	<-quit
