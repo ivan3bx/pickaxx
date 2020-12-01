@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -21,12 +23,16 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-func rootHandler(c *gin.Context) {
-	var (
-		lines []string
-	)
+type processHandler struct {
+	manager *pickaxx.ProcessManager
+	writer  io.Writer
+}
 
-	manager := getServerManager(c)
+func (h *processHandler) rootHandler(c *gin.Context) {
+	var (
+		manager = h.manager
+		lines   []string
+	)
 
 	if manager.Active() {
 		content, _ := ioutil.ReadFile("testserver/logs/latest.log")
@@ -39,26 +45,13 @@ func rootHandler(c *gin.Context) {
 	})
 }
 
-func webSocketHandler(cm *pickaxx.ClientManager) func(c *gin.Context) {
-	return func(c *gin.Context) {
-		var (
-			conn *websocket.Conn
-			err  error
-		)
+func (h *processHandler) startServerHandler(c *gin.Context) {
+	var (
+		manager = h.manager
+		w       = h.writer
+	)
 
-		if conn, err = upgrader.Upgrade(c.Writer, c.Request, nil); err != nil {
-			c.AbortWithError(http.StatusInternalServerError, err)
-			return
-		}
-
-		cm.AddClient(conn)
-	}
-}
-
-func startServerHandler(c *gin.Context) {
-	manager := getServerManager(c)
-
-	if err := manager.StartServer(); err != nil {
+	if err := manager.Start(w); err != nil {
 		var status int
 		var message string
 
@@ -74,13 +67,34 @@ func startServerHandler(c *gin.Context) {
 	}
 }
 
-func stopServerHandler(c *gin.Context) {
-	manager := getServerManager(c)
+func (h *processHandler) stopServerHandler(c *gin.Context) {
+	var (
+		manager = h.manager
+	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 
-	if err := manager.StopServer(ctx); err != nil {
+	if err := manager.Stop(ctx); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
 	}
+}
+
+type clientHandler struct {
+	manager *pickaxx.ClientManager
+}
+
+func (h *clientHandler) webSocketHandler(c *gin.Context) {
+	var (
+		cm   = h.manager
+		conn *websocket.Conn
+		err  error
+	)
+
+	if conn, err = upgrader.Upgrade(c.Writer, c.Request, nil); err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+
+	cm.AddClient(conn)
 }

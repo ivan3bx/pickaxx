@@ -33,22 +33,8 @@ var ErrNoProcess = errors.New("no process running")
 // ErrInvalidClient occurs when a client is not valid.
 var ErrInvalidClient = errors.New("client not valid")
 
-// ServerManager manages an instance of Minecraft server.
-type ServerManager interface {
-	Active() bool
-	StartServer() error
-	StopServer(context.Context) error
-}
-
-// NewServerManager creates a new instance of a server manager, and sends all output to the given writer.
-func NewServerManager(w io.Writer) ServerManager {
-	return &serverManager{
-		state:  Unknown,
-		writer: w,
-	}
-}
-
-type serverManager struct {
+// ProcessManager manages the Minecraft server's process lifecycle.
+type ProcessManager struct {
 	state          ServerState
 	console        io.Writer
 	process        *os.Process
@@ -56,16 +42,28 @@ type serverManager struct {
 	killServerFunc context.CancelFunc
 }
 
+// Active returns whether the process is running / active.
 // TODO put this in a goroutine; poll status every 500ms and send
 // a state update through state manager if process died.
-func (m *serverManager) Active() bool {
-	return m.process != nil && m.process.Signal(syscall.Signal(0)) == nil
+func (m *ProcessManager) Active() bool {
+	if m.process == nil {
+		return false
+	}
+
+	return m.process.Signal(syscall.Signal(0)) == nil
 }
 
-func (m *serverManager) StartServer() error {
+// Start will initialize a new process, sending all output to the provided
+// io.Writer, and set values on this object to track process state.
+// This will return an error if the process is already running.
+func (m *ProcessManager) Start(w io.Writer) error {
 	if m.state == Started {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
+
+	// initialize
+	m.state = Unknown
+	m.writer = w
 
 	m.updateState(Starting)
 
@@ -114,27 +112,10 @@ func (m *serverManager) StartServer() error {
 	return nil
 }
 
-func (m *serverManager) captureOutput(src io.Reader) {
-	buf := make([]byte, 1024, 1024)
-
-	for {
-		n, err := src.Read(buf[:])
-		if n > 0 {
-			data := buf[:n]
-			m.writer.Write(data)
-		}
-		if err != nil {
-			if err == io.EOF {
-				return
-			}
-
-			log.WithError(err).Error("read/write failed")
-			return
-		}
-	}
-}
-
-func (m *serverManager) StopServer(ctx context.Context) error {
+// Stop will halt the current process by sending a direct
+// shutdown command. This will also kill the process if it
+// does not respond in a given timeframe.
+func (m *ProcessManager) Stop(ctx context.Context) error {
 	if !m.Active() {
 		return ErrNoProcess
 	}
@@ -159,9 +140,11 @@ func (m *serverManager) StopServer(ctx context.Context) error {
 
 	log.Info("clean shutdown starting..")
 	m.console.Write([]byte("/stop\n"))
+
 	if _, err := m.process.Wait(); err != nil {
 		log.WithError(err).Warn("clean shutdown failed with error")
 	}
+
 	m.process = nil
 	m.updateState(Stopped)
 	log.Info("clean shutdown completed")
@@ -169,7 +152,27 @@ func (m *serverManager) StopServer(ctx context.Context) error {
 	return nil
 }
 
-func (m *serverManager) updateState(newState ServerState) {
+func (m *ProcessManager) captureOutput(src io.Reader) {
+	buf := make([]byte, 1024, 1024)
+
+	for {
+		n, err := src.Read(buf[:])
+		if n > 0 {
+			data := buf[:n]
+			m.writer.Write(data)
+		}
+		if err != nil {
+			if err == io.EOF {
+				return
+			}
+
+			log.WithError(err).Error("read/write failed")
+			return
+		}
+	}
+}
+
+func (m *ProcessManager) updateState(newState ServerState) {
 	m.state = newState
 	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
 	m.writer.Write([]byte(jsonString))

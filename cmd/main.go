@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,69 +9,61 @@ import (
 
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
-	"github.com/gin-gonic/gin"
 	"github.com/ivan3bx/pickaxx"
 )
 
 func main() {
 	var (
-		clientMgr  pickaxx.ClientManager = pickaxx.ClientManager{}
-		processMgr pickaxx.ServerManager = pickaxx.NewServerManager(&clientMgr)
+		clientMgr  *pickaxx.ClientManager  = &pickaxx.ClientManager{}
+		processMgr *pickaxx.ProcessManager = &pickaxx.ProcessManager{}
 	)
 
-	log.SetLevel(log.DebugLevel)
-	log.SetHandler(cli.Default)
+	configureLogging(log.DebugLevel)
 
-	// start web server
-	e := gin.New()
-	e.Use(gin.Logger(), gin.Recovery())
+	e := newRouter()
 
-	e.Static("/assets", "public")
-	e.LoadHTMLFiles("templates/index.html")
-
-	e.GET("/ws", webSocketHandler(&clientMgr))
-
-	routes := e.Group("/", managerMiddleware(processMgr))
+	// routes: process handling
+	ph := processHandler{
+		manager: processMgr,
+		writer:  clientMgr,
+	}
 	{
-		routes.GET("/", rootHandler)
-		routes.POST("/start", startServerHandler)
-		routes.POST("/stop", stopServerHandler)
+		e.GET("/", ph.rootHandler)
+		e.POST("/start", ph.startServerHandler)
+		e.POST("/stop", ph.stopServerHandler)
+
 	}
 
-	srv := &http.Server{
-		Addr:    "127.0.0.1:8080",
-		Handler: e,
+	// routes: client handling
+	ch := clientHandler{clientMgr}
+	{
+		e.GET("/ws", ch.webSocketHandler)
 	}
 
-	// Run the server
-	go func() {
-		if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("server failed: %w", err)
-		}
-	}()
+	// Start the web server
+	srv := startWebServer(e)
 
 	// shutdown on interrupt
 	quit := make(chan os.Signal)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 
 	<-quit
-	shutdown(srv, processMgr)
+	log.Debug("shutdown initiated")
+	{
+		stopWebServer(srv)
+		stopProcesses(processMgr)
+	}
+	log.Info("shutdown complete")
 }
 
-func shutdown(srv *http.Server, manager pickaxx.ServerManager) {
-	log.Debug("shutdown initiated")
+func configureLogging(level log.Level) {
+	log.SetLevel(level)
+	log.SetHandler(cli.Default)
+}
 
+func stopProcesses(m *pickaxx.ProcessManager) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	manager.StopServer(ctx)
-	cancel()
-
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := srv.Shutdown(ctx); err != nil {
-		log.WithError(err).Error("server failed to shutdown")
-	}
-
-	log.Info("shutdown complete")
-	os.Exit(1)
+	m.Stop(ctx)
 }

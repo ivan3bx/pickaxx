@@ -7,9 +7,9 @@ type ServerState int
 
 // Server Statuses
 const (
-	Starting ServerState = iota
+	Unknown ServerState = iota
+	Starting
 	Started
 	Stopping
 	Stopped
-	Unknown
 )
