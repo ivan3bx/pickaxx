@@ -31,7 +31,7 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 		lines   []string
 	)
 
-	if manager.Active() {
+	if manager.Running() {
 		content, _ := ioutil.ReadFile("testserver/logs/latest.log")
 		lines = strings.Split(string(content), "\n")
 	}

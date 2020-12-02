@@ -9,7 +9,7 @@ type ServerState int
 const (
 	Unknown ServerState = iota
 	Starting
-	Started
+	Running
 	Stopping
 	Stopped
 )

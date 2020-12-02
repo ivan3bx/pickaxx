@@ -10,12 +10,12 @@ func _() {
 	var x [1]struct{}
 	_ = x[Unknown-0]
 	_ = x[Starting-1]
-	_ = x[Started-2]
+	_ = x[Running-2]
 	_ = x[Stopping-3]
 	_ = x[Stopped-4]
 }
 
-const _ServerState_name = "UnknownStartingStartedStoppingStopped"
+const _ServerState_name = "UnknownStartingRunningStoppingStopped"
 
 var _ServerState_index = [...]uint8{0, 7, 15, 22, 30, 37}
 

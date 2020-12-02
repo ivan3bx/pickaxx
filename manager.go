@@ -8,8 +8,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
+
+	rcon "github.com/Kelwing/mc-rcon"
 
 	"github.com/apex/log"
 )
@@ -36,29 +37,24 @@ var ErrInvalidClient = errors.New("client not valid")
 
 // ProcessManager manages the Minecraft server's process lifecycle.
 type ProcessManager struct {
-	state          ServerState
-	console        io.Writer
-	process        *os.Process
+	state   ServerState
+	process *os.Process
+
+	console        *rcon.MCConn
 	writer         io.Writer
 	killServerFunc context.CancelFunc
 }
 
-// Active returns whether the process is running / active.
-// TODO put this in a goroutine; poll status every 500ms and send
-// a state update through state manager if process died.
-func (m *ProcessManager) Active() bool {
-	if m.process == nil {
-		return false
-	}
-
-	return m.process.Signal(syscall.Signal(0)) == nil
+// Running returns whether the process is running / active.
+func (m *ProcessManager) Running() bool {
+	return m.state == Starting || m.state == Running
 }
 
 // Start will initialize a new process, sending all output to the provided
 // io.Writer, and set values on this object to track process state.
 // This will return an error if the process is already running.
 func (m *ProcessManager) Start(w io.Writer) error {
-	if m.state == Started {
+	if m.state == Running {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
 
@@ -78,16 +74,11 @@ func (m *ProcessManager) Start(w io.Writer) error {
 	m.killServerFunc = cancel
 
 	var (
-		cmdIn  io.Writer
 		cmdOut io.Reader
 		cmdErr io.Reader
 
 		err error
 	)
-
-	if cmdIn, err = cmd.StdinPipe(); err != nil {
-		return err
-	}
 
 	if cmdOut, err = cmd.StdoutPipe(); err != nil {
 		return err
@@ -103,21 +94,24 @@ func (m *ProcessManager) Start(w io.Writer) error {
 	}
 
 	m.process = cmd.Process
-	m.console = cmdIn
 
 	go m.captureOutput(cmdOut)
 	go m.captureOutput(cmdErr)
-
-	m.updateState(Started)
+	go m.configureInput(ctx)
 
 	return nil
 }
+
+// func captureOutput(cmd *exec.Cmd, w io.Writer) err{
+
+// }
 
 // Stop will halt the current process by sending a direct
 // shutdown command. This will also kill the process if it
 // does not respond in a given timeframe.
 func (m *ProcessManager) Stop(ctx context.Context) error {
-	if !m.Active() {
+	if !m.Running() {
+		m.updateState(Stopped)
 		return ErrNoProcess
 	}
 
@@ -140,7 +134,7 @@ func (m *ProcessManager) Stop(ctx context.Context) error {
 	}()
 
 	log.Info("clean shutdown starting..")
-	m.console.Write([]byte("/stop\n"))
+	m.console.SendCommand("stop")
 
 	if _, err := m.process.Wait(); err != nil {
 		log.WithError(err).Warn("clean shutdown failed with error")
@@ -164,6 +158,11 @@ func (m *ProcessManager) captureOutput(src io.Reader) {
 
 func (m *ProcessManager) updateState(newState ServerState) {
 	m.state = newState
+
+	if m.writer == nil {
+		return
+	}
+
 	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
 	m.writer.Write([]byte(jsonString))
 }
