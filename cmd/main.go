@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
@@ -62,8 +60,5 @@ func configureLogging(level log.Level) {
 }
 
 func stopProcesses(m *pickaxx.ProcessManager) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	m.Stop(ctx)
+	m.Stop()
 }

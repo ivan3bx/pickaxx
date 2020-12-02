@@ -1,71 +1,84 @@
 package pickaxx
 
 import (
-	"context"
-	"fmt"
 	"time"
 
 	rcon "github.com/Kelwing/mc-rcon"
 	"github.com/apex/log"
 )
 
-func (m *ProcessManager) configureInput(ctx context.Context) {
-	var (
-		conn *rcon.MCConn
-		err  error
-	)
-
-	conn = &rcon.MCConn{}
-
-	ticker := time.NewTicker(time.Second * 3)
-
-	for i := 0; i < 10; i++ {
-		<-ticker.C
-		if err = conn.Open("localhost:25575", "passw"); err != nil {
-			log.Debug("rcon: server not responding yet")
-			continue
-		}
-		break
-	}
-
-	if err != nil {
-		log.Error("rcon: server not detected. failed.")
-		m.Stop(ctx)
-		return
-	}
-
-	if err = conn.Authenticate(); err != nil {
-		log.WithError(err).Error("rcon: auth failed")
-		m.Stop(ctx)
-		return
-	}
-
-	// server is running!
-	m.console = conn
-	m.updateState(Running)
-
-	// detect server exiting
-	m.consoleLoop(ctx)
+type consoleInput struct {
+	rcon.MCConn
+	stop chan<- bool
 }
 
-func (m *ProcessManager) consoleLoop(ctx context.Context) {
-	conn := m.console
+// configureInput creates a new MCConn. It accepts a 'stop' channel which
+// it uses to signal an abnormal error condition, and a completion
+// function that will be invoked once the console validates the server
+// is responding to commands.
+//
+// This function will start a go routine that routinely checks for
+// liveness of the connection by executing a dummy command. If this
+// probe fails, the 'stop' channel will receive a message as well.
+func configureInput(stop chan<- bool) *consoleInput {
+	conn := consoleInput{stop: stop}
+	return &conn
+}
 
-	if conn == nil {
-		return
-	}
+func (c *consoleInput) SendCommand(command string) (string, error) {
+	defer func() {
+		if recover() != nil {
+			log.Error("error sending command. ignoring")
+		}
+	}()
 
-	tick := time.NewTicker(time.Second * 2)
+	return c.MCConn.SendCommand(command)
+}
 
-	for range tick.C {
-		_, err := conn.SendCommand("list")
+func (c *consoleInput) connect(host, password string, onConnect func()) {
+	var err error
 
-		if err != nil {
-			log.Error("process not responding")
-			m.Stop(ctx)
+	go func() {
+		defer func() {
+			c.stop <- true
+		}()
+
+		if err := c.open(host, password); err != nil {
+			log.WithError(err).Error("rcon: server not detected. failed.")
 			return
 		}
 
-		fmt.Println("tick..")
+		if err = c.Authenticate(); err != nil {
+			log.WithError(err).Error("rcon: auth failed")
+			return
+		}
+
+		onConnect()
+
+		livenessProbe(c, time.Second*4)
+	}()
+}
+
+func (c *consoleInput) open(host, password string) error {
+	var err error
+
+	ticker := time.NewTicker(time.Second * 3)
+	for i := 0; i < 10; i++ {
+		<-ticker.C
+		if err = c.Open("localhost:25575", "passw"); err == nil {
+			break
+		}
+	}
+
+	return err
+}
+
+func livenessProbe(c *consoleInput, d time.Duration) {
+	tick := time.NewTicker(d)
+	for range tick.C {
+		if _, err := c.SendCommand("list"); err != nil {
+			log.Warn("rcon: console is closed")
+			return
+		}
 	}
 }

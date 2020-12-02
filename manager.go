@@ -6,11 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"time"
-
-	rcon "github.com/Kelwing/mc-rcon"
 
 	"github.com/apex/log"
 )
@@ -37,12 +34,10 @@ var ErrInvalidClient = errors.New("client not valid")
 
 // ProcessManager manages the Minecraft server's process lifecycle.
 type ProcessManager struct {
-	state   ServerState
-	process *os.Process
+	state ServerState
+	stop  chan bool
 
-	console        *rcon.MCConn
-	writer         io.Writer
-	killServerFunc context.CancelFunc
+	console *consoleInput
 }
 
 // Running returns whether the process is running / active.
@@ -54,30 +49,88 @@ func (m *ProcessManager) Running() bool {
 // io.Writer, and set values on this object to track process state.
 // This will return an error if the process is already running.
 func (m *ProcessManager) Start(w io.Writer) error {
-	if m.state == Running {
+	if m.state == Running || m.state == Starting {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
+	fmt.Println("State is:", m.state.String())
 
 	// initialize
 	m.state = Unknown
-	m.writer = w
+	m.stop = make(chan bool, 1)
 
-	m.updateState(Starting)
+	m.writeState(w, Starting)
 
-	ctx := log.NewContext(context.Background(), log.WithField("action", "startServer"))
-	ctx, cancel := context.WithCancel(ctx)
-	log := log.FromContext(ctx)
+	go func() {
+		ctx := log.NewContext(context.Background(), log.WithField("action", "startServer"))
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
 
-	cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
-	cmd.Dir = "testserver"
+		log := log.FromContext(ctx)
+		cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
+		cmd.Dir = "testserver"
 
-	m.killServerFunc = cancel
+		pipeCommandOutput(cmd, w)
 
+		if err := cmd.Start(); err != nil {
+			log.WithError(err).Error("failed to start command")
+			m.writeState(w, Stopped)
+			return
+		}
+
+		m.console = &consoleInput{stop: m.stop}
+		m.console.connect("localhost:25575", "passw", func() {
+			m.writeState(w, Running)
+		})
+
+		//
+		// wait until server is stopped
+		//
+
+		<-m.stop
+		m.writeState(w, Stopping)
+
+		go func() {
+			timer := time.NewTimer(time.Second * 10)
+
+			select {
+			case <-ctx.Done():
+			case <-timer.C:
+				log.Debug("timer deadline expired")
+				cancel()
+			}
+
+		}()
+
+		log.Info("clean shutdown starting..")
+		m.console.SendCommand("stop")
+
+		if _, err := cmd.Process.Wait(); err != nil {
+			log.WithError(err).Warn("clean shutdown failed with error")
+		}
+
+		m.writeState(w, Stopped)
+		log.Info("shutdown completed")
+	}()
+
+	return nil
+}
+
+// Stop will halt the current process by sending a direct
+// shutdown command. This will also kill the process if it
+// does not respond in a given timeframe.
+func (m *ProcessManager) Stop() error {
+	if !m.Running() {
+		return ErrNoProcess
+	}
+
+	m.stop <- true
+	return nil
+}
+
+func pipeCommandOutput(cmd *exec.Cmd, dest io.Writer) error {
 	var (
-		cmdOut io.Reader
-		cmdErr io.Reader
-
-		err error
+		cmdOut, cmdErr io.Reader
+		err            error
 	)
 
 	if cmdOut, err = cmd.StdoutPipe(); err != nil {
@@ -88,81 +141,26 @@ func (m *ProcessManager) Start(w io.Writer) error {
 		return err
 	}
 
-	if err := cmd.Start(); err != nil {
-		log.WithError(err).Error("failed to start command")
-		return err
-	}
-
-	m.process = cmd.Process
-
-	go m.captureOutput(cmdOut)
-	go m.captureOutput(cmdErr)
-	go m.configureInput(ctx)
-
-	return nil
-}
-
-// func captureOutput(cmd *exec.Cmd, w io.Writer) err{
-
-// }
-
-// Stop will halt the current process by sending a direct
-// shutdown command. This will also kill the process if it
-// does not respond in a given timeframe.
-func (m *ProcessManager) Stop(ctx context.Context) error {
-	if !m.Running() {
-		m.updateState(Stopped)
-		return ErrNoProcess
-	}
-
-	m.updateState(Stopping)
-
-	// set timer to force shutdown if clean shutdown stalls
 	go func() {
-		timer := time.NewTimer(time.Second * 10)
-
-		select {
-		case <-ctx.Done():
-			log.Debug("context marked as done")
-		case <-timer.C:
-			log.Debug("timer deadline expired")
+		s := bufio.NewScanner(cmdOut)
+		for s.Scan() {
+			dest.Write(s.Bytes())
 		}
-
-		m.killServerFunc()
-		m.process = nil
-		m.updateState(Stopped)
 	}()
 
-	log.Info("clean shutdown starting..")
-	m.console.SendCommand("stop")
-
-	if _, err := m.process.Wait(); err != nil {
-		log.WithError(err).Warn("clean shutdown failed with error")
-	}
-
-	m.process = nil
-	m.updateState(Stopped)
-	log.Info("clean shutdown completed")
+	go func() {
+		s := bufio.NewScanner(cmdErr)
+		for s.Scan() {
+			dest.Write(s.Bytes())
+		}
+	}()
 
 	return nil
 }
 
-func (m *ProcessManager) captureOutput(src io.Reader) {
-	s := bufio.NewScanner(src)
-	w := m.writer
-
-	for s.Scan() {
-		w.Write(s.Bytes())
-	}
-}
-
-func (m *ProcessManager) updateState(newState ServerState) {
+func (m *ProcessManager) writeState(w io.Writer, newState ServerState) error {
 	m.state = newState
-
-	if m.writer == nil {
-		return
-	}
-
 	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
-	m.writer.Write([]byte(jsonString))
+	_, err := w.Write([]byte(jsonString))
+	return err
 }
