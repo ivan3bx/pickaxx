@@ -1,6 +1,6 @@
 
 document.addEventListener("DOMContentLoaded", function () {
-    var item = document.getElementsByClassName("message-list")[0];
+    item = document.getElementsByClassName("messages")[0];
     item.scrollTop = item.scrollHeight;
 });
 
@@ -67,7 +67,7 @@ if (window["WebSocket"]) {
             var item = document.getElementsByClassName("message-list")[0];
             item.innerHTML = item.innerHTML + "<li>" + data.output + "</li>";
 
-            item = document.getElementById("main-content");
+            item = document.getElementsByClassName("messages")[0];
             item.scrollTop = item.scrollHeight;
         }
     }
