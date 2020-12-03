@@ -12,19 +12,6 @@ type consoleInput struct {
 	stop chan<- bool
 }
 
-// configureInput creates a new MCConn. It accepts a 'stop' channel which
-// it uses to signal an abnormal error condition, and a completion
-// function that will be invoked once the console validates the server
-// is responding to commands.
-//
-// This function will start a go routine that routinely checks for
-// liveness of the connection by executing a dummy command. If this
-// probe fails, the 'stop' channel will receive a message as well.
-func configureInput(stop chan<- bool) *consoleInput {
-	conn := consoleInput{stop: stop}
-	return &conn
-}
-
 func (c *consoleInput) SendCommand(command string) (string, error) {
 	defer func() {
 		if recover() != nil {

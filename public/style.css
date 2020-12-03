@@ -1,8 +1,29 @@
-#chat-box {
- height: 350px;
- overflow-y: scroll;
- min-width: 350px;
- border-width: 1;
- font-family: "Source Code Pro", Monaco, monospace;
- font-size: small;
+body > .container {
+    padding-top: 60px;
 }
+
+.header {
+    color: #333;
+}
+
+.message-box {
+    position: fixed!important;
+    bottom: 0;
+}
+
+.message-list {
+  margin: 0;
+  padding: 0;
+}
+
+.message-list li {
+    background: #ffffff;
+    list-style: none;
+}
+
+.message-list li:nth-child(odd) {
+    background: #f2f2f2;
+}
+
+.servers    { background-color: #362233; }
+.messages   { background-color: #ffffff; }

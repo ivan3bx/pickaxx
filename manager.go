@@ -40,6 +40,11 @@ type ProcessManager struct {
 	console *consoleInput
 }
 
+// CurrentState is the current running state of the process being managed.
+func (m *ProcessManager) CurrentState() ServerState {
+	return m.state
+}
+
 // Running returns whether the process is running / active.
 func (m *ProcessManager) Running() bool {
 	return m.state == Starting || m.state == Running

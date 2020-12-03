@@ -36,7 +36,7 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"logLines": lines,
-		"status":   pickaxx.Unknown,
+		"status":   manager.CurrentState().String(),
 	})
 }
 
