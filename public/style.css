@@ -10,32 +10,48 @@ body > .container {
     flex-wrap: nowrap!important;
 }
 
+.content-pane li {
+    list-style: none;
+}
+
 .servers {
+    padding-right: 0 !important;
+    margin-top: 56px;
     background-color: #223623;
     overflow: hidden;
 }
 
+.servers ul {
+    padding-left: 0;
+    padding-right: 0;
+}
+
+.servers li {
+    padding-left: 2em;
+}
+
+.servers li.selected {
+    background-color: rgb(68, 91, 22);
+}
+
 .messages {
+    overflow:auto;
+    margin-top: 56px;
+    margin-bottom: 30px;
     background-color: #ffffff;
     overflow:auto;
 }
 
-.message-box {
-    /* width: 100%; */
-    position: fixed!important;
-    bottom: 0;
-}
-
 .message-list {
-  margin: 0;
-  padding: 0;
-}
-
-.message-list li {
-    background: #ffffff;
-    list-style: none;
+    margin: 0;
+    padding: 0;
 }
 
 .message-list li:nth-child(odd) {
     background: #f2f2f2;
+}
+
+.message-box {
+    position: fixed!important;
+    bottom: 0;
 }

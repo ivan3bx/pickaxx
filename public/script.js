@@ -1,6 +1,6 @@
 
 document.addEventListener("DOMContentLoaded", function () {
-    item = document.getElementsByClassName("messages")[0];
+    var item = document.getElementsByClassName("messages")[0];
     item.scrollTop = item.scrollHeight;
 });
 
