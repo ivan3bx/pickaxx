@@ -1,34 +1,65 @@
 package main
 
 import (
+	"os"
+	"os/signal"
+	"syscall"
+
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
-	"github.com/gin-gonic/gin"
 	"github.com/ivan3bx/pickaxx"
 )
 
 func main() {
-	log.SetLevel(log.DebugLevel)
-	log.SetHandler(cli.Default)
+	var (
+		clientMgr  *pickaxx.ClientManager  = &pickaxx.ClientManager{}
+		processMgr *pickaxx.ProcessManager = &pickaxx.ProcessManager{}
+	)
 
-	// start the server manager
-	manager := pickaxx.NewServerManager()
-	go manager.Run()
+	configureLogging(log.DebugLevel)
 
-	// start web server
-	e := gin.New()
-	e.Use(gin.Logger(), gin.Recovery())
+	e := newRouter()
 
-	e.Static("/assets", "public")
-	e.LoadHTMLFiles("templates/index.html")
-
-	routes := e.Group("/", managerMiddleware(manager))
+	// routes: process handling
+	ph := processHandler{
+		manager: processMgr,
+		writer:  clientMgr,
+	}
 	{
-		routes.GET("/", rootHandler)
-		routes.GET("/ws", webSocketHandler)
-		routes.POST("/start", startServerHandler)
-		routes.POST("/stop", stopServerHandler)
+		e.GET("/", ph.rootHandler)
+		e.POST("/start", ph.startServerHandler)
+		e.POST("/stop", ph.stopServerHandler)
+		e.POST("/send", ph.sendHandler)
+
 	}
 
-	e.Run("127.0.0.1:8080")
+	// routes: client handling
+	ch := clientHandler{clientMgr}
+	{
+		e.GET("/ws", ch.webSocketHandler)
+	}
+
+	// Start the web server
+	srv := startWebServer(e)
+
+	// shutdown on interrupt
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	<-quit
+	log.Debug("shutdown initiated")
+	{
+		stopWebServer(srv)
+		stopProcesses(processMgr)
+	}
+	log.Info("shutdown complete")
+}
+
+func configureLogging(level log.Level) {
+	log.SetLevel(level)
+	log.SetHandler(cli.Default)
+}
+
+func stopProcesses(m *pickaxx.ProcessManager) {
+	m.Stop()
 }

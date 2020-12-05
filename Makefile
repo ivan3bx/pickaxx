@@ -10,7 +10,7 @@ test:
 	@go test ./...
 
 test-convey:
-	@goconvey -launchBrowser=false -watchedSuffixes ".json,.go,.yml" -excludedDirs "vendor,bin"
+	@goconvey -launchBrowser=false -watchedSuffixes ".json,.go,.yml" -excludedDirs "vendor,bin,testserver,public,templates"
 
 # List all makefile targets
 list:

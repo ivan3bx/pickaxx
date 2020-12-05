@@ -1,19 +1,18 @@
 package pickaxx
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"net"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/apex/log"
-
-	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 )
 
 const (
@@ -30,89 +29,167 @@ const (
 // ErrProcessExists exists when a new server process can not be started.
 var ErrProcessExists = errors.New("unable to start new process")
 
-// ErrNoProcess occurs when no process exists to take an action on
+// ErrNoProcess occurs when no process exists to take an action on.
 var ErrNoProcess = errors.New("no process running")
 
-// Manager manages one or more Minecraft servers.
-type Manager interface {
-	Active() bool
-	Run()
-	AddClient(*websocket.Conn)
-	StartServer() error
-	StopServer() error
+// ErrInvalidClient occurs when a client is not valid.
+var ErrInvalidClient = errors.New("client not valid")
+
+// ProcessManager manages the Minecraft server's process lifecycle.
+type ProcessManager struct {
+	cmdIn   io.Writer
+	fileOut *os.File
+
+	serverPort int
+	state      ServerState
+	stop       chan bool
 }
 
-// NewServerManager creates a new instance of a server manager.
-func NewServerManager() Manager {
-	return &serverManager{
-		state: ManagedState{
-			current: Unknown,
-			update:  make(chan ServerState),
-		},
-		output:     make(chan []byte, 10),
-		register:   make(chan *client),
-		unregister: make(chan *client),
-		clients:    make(map[*client]bool),
-	}
+// CurrentState is the current running state of the process being managed.
+func (m *ProcessManager) CurrentState() ServerState {
+	return m.state
 }
 
-type serverManager struct {
-	state ManagedState
-	// stop       chan bool
-	// status     chan string
-	output     chan []byte
-	register   chan *client
-	unregister chan *client
-
-	killServerFunc context.CancelFunc
-
-	clients clients
-	console io.Writer
-	process *os.Process
+// Running returns whether the process is running / active.
+func (m *ProcessManager) Running() bool {
+	return m.state == Starting || m.state == Running
 }
 
-func (m *serverManager) AddClient(conn *websocket.Conn) {
-	cl := &client{
-		manager: m,
-		conn:    conn,
-	}
-
-	m.register <- cl
+func (m *ProcessManager) Logfile() string {
+	return m.fileOut.Name()
 }
 
-// TODO put this in a goroutine; poll status every 500ms and send
-// a state update through state manager if process died.
-func (m *serverManager) Active() bool {
-	return m.process != nil && m.process.Signal(syscall.Signal(0)) == nil
-}
-
-func (m *serverManager) StartServer() error {
-	if m.state.current == Started {
+// Start will initialize a new process, sending all output to the provided
+// io.Writer, and set values on this object to track process state.
+// This will return an error if the process is already running.
+func (m *ProcessManager) Start(w io.Writer) error {
+	if m.state == Running || m.state == Starting {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
 
-	m.state.update <- Starting
+	// initialize
+	m.serverPort = 25565
+	m.state = Unknown
+	m.stop = make(chan bool, 1)
+	m.writeState(w, Starting)
 
-	ctx := log.NewContext(context.Background(), log.WithField("action", "runloop"))
-	ctx, cancel := context.WithCancel(ctx)
-	log := log.FromContext(ctx)
+	// set up log file
+	logFile, err := ioutil.TempFile(os.TempDir(), fmt.Sprintf("pickaxx_%d", m.serverPort))
 
-	cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
-	cmd.Dir = "testserver"
-
-	m.killServerFunc = cancel
-
-	var (
-		cmdIn  io.Writer
-		cmdOut io.Reader
-		cmdErr io.Reader
-
-		err error
-	)
-
-	if cmdIn, err = cmd.StdinPipe(); err != nil {
+	if err != nil {
 		return err
 	}
+
+	m.fileOut = logFile
+
+	// cmdOut collects all output from this process
+	consoleOut := io.MultiWriter(w, &newlineWriter{logFile})
+
+	go func() {
+
+		io.WriteString(consoleOut, "Server is starting")
+
+		ctx := log.NewContext(context.Background(), log.WithField("action", "processManager"))
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		log := log.FromContext(ctx)
+		cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
+		cmd.Dir = "testserver"
+
+		if err := pipeCommandOutput(cmd, consoleOut); err != nil {
+			log.WithError(err).Error("error piping command output")
+			return
+		}
+
+		pipin, err := cmd.StdinPipe()
+
+		if err != nil {
+			log.WithError(err).Error("error connecting command stdinput")
+			return
+		}
+
+		m.cmdIn = pipin
+
+		if err := cmd.Start(); err != nil {
+			log.WithError(err).Error("failed to start command")
+			m.writeState(w, Stopped)
+			return
+		}
+
+		m.writeState(w, Running)
+
+		// liveness probe
+		go livenessProbe(func() { m.Stop() })
+
+		//
+		// wait until server is stopped
+		//
+
+		<-m.stop
+		m.writeState(w, Stopping)
+		io.WriteString(consoleOut, "Shutting down..")
+
+		go func() {
+			timer := time.NewTimer(time.Second * 10)
+
+			select {
+			case <-ctx.Done():
+			case <-timer.C:
+				log.Debug("timer deadline expired")
+				cancel()
+			}
+		}()
+
+		log.Info("clean shutdown starting..")
+		m.Submit("stop")
+		time.Sleep(time.Second * 5)
+
+		if _, err := cmd.Process.Wait(); err != nil {
+			log.WithError(err).Warn("clean shutdown failed with error")
+		}
+
+		m.writeState(w, Stopped)
+		io.WriteString(consoleOut, "Shutdown complete. Thanks for playing.")
+	}()
+
+	return nil
+}
+
+// Stop will halt the current process by sending a direct
+// shutdown command. This will also kill the process if it
+// does not respond in a given timeframe.
+func (m *ProcessManager) Stop() error {
+	if !m.Running() {
+		return ErrNoProcess
+	}
+
+	m.stop <- true
+	return nil
+}
+
+// Submit will submit a new command to the underlying minecraft process.
+// Any output is returned asynchonously in the processing loop.
+// Prefixed slash-commands will have slashes trimmed (e.g. "/help" -> "help")
+func (m *ProcessManager) Submit(command string) error {
+	if len(command) == 0 {
+		return errors.New("command is empty")
+	}
+
+	if command[0] == '/' {
+		command = command[1:]
+	}
+
+	cmd := fmt.Sprintf("%s\n", command)
+	_, err := io.WriteString(m.cmdIn, cmd)
+	return err
+}
+
+func pipeCommandOutput(cmd *exec.Cmd, dest io.Writer) error {
+	var (
+		cmdOut, cmdErr io.Reader
+		err            error
+	)
 
 	if cmdOut, err = cmd.StdoutPipe(); err != nil {
 		return err
@@ -122,98 +199,60 @@ func (m *serverManager) StartServer() error {
 		return err
 	}
 
-	if err := cmd.Start(); err != nil {
-		log.WithError(err).Error("failed to start command")
-		return err
-	}
+	go func() {
+		s := bufio.NewScanner(cmdOut)
+		for s.Scan() {
+			dest.Write(s.Bytes())
+		}
+	}()
 
-	m.process = cmd.Process
-	m.console = cmdIn
-
-	go m.captureOutput(cmdOut)
-	go m.captureOutput(cmdErr)
-
-	m.state.update <- Started
+	go func() {
+		s := bufio.NewScanner(cmdErr)
+		dest.Write(s.Bytes())
+	}()
 
 	return nil
 }
 
-func (m *serverManager) captureOutput(src io.Reader) {
-	buf := make([]byte, 1024, 1024)
+func (m *ProcessManager) writeState(w io.Writer, newState ServerState) error {
+	m.state = newState
+	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
+	_, err := w.Write([]byte(jsonString))
+	return err
+}
+
+func livenessProbe(cancel func()) {
+	time.Sleep(time.Second * 15)
+	ticker := time.NewTicker(time.Second * 2)
+	defer cancel()
 
 	for {
-		n, err := src.Read(buf[:])
-		if n > 0 {
-			data := buf[:n]
-			m.output <- data
-		}
-		if err != nil {
-			if err == io.EOF {
-				return
-			}
-
-			log.WithError(err).Error("read/write failed")
+		<-ticker.C
+		if !portOpen("localhost", "25565") {
 			return
 		}
 	}
 }
 
-func (m *serverManager) StopServer() error {
-	if !m.Active() {
-		log.Warn("Server not running. No process found.")
-		return ErrNoProcess
+func portOpen(host string, port string) bool {
+	hostname := net.JoinHostPort(host, port)
+	conn, err := net.DialTimeout("tcp", hostname, time.Second)
+
+	if err != nil || conn == nil {
+		return false
 	}
 
-	m.state.update <- Stopping
-
-	// set timer to force shutdown if clean shutdown stalls
-	go func() {
-		timer := time.NewTimer(time.Second * 10)
-
-		select {
-		case <-timer.C:
-			if m.state.current != Stopped {
-				log.Debug("timer expired. stopping server.")
-				m.killServerFunc()
-				m.process = nil
-				m.state.update <- Stopped
-			}
-		}
-	}()
-
-	// attempt clean shutdown
-	go func() {
-		m.console.Write([]byte("/stop\n"))
-		m.process.Wait()
-		m.killServerFunc()
-		m.process = nil
-		m.state.update <- Stopped
-	}()
-
-	return nil
+	conn.Close()
+	return true
 }
 
-func (m *serverManager) Run() {
-	for {
-		clients := m.clients
+type newlineWriter struct {
+	wrapped io.Writer
+}
 
-		select {
-		case client := <-m.register:
-			clients.Add(client)
-		case client := <-m.unregister:
-			clients.Remove(client)
-		case status := <-m.state.update:
-			m.state.Lock()
-			m.state.current = status
-			m.state.Unlock()
-
-			clients.broadcast(gin.H{
-				"status": status.String(),
-			})
-		case output := <-m.output:
-			clients.broadcast(gin.H{
-				"output": string(output),
-			})
-		}
+func (w *newlineWriter) Write(p []byte) (n int, err error) {
+	if n, err := w.wrapped.Write(p); err != nil {
+		return n, err
 	}
+	return w.wrapped.Write([]byte("\n"))
 }
