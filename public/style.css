@@ -2,6 +2,10 @@ body > .container {
     padding-top: 60px;
 }
 
+.navbar-brand {
+    font-family: 'Courier New', Courier, monospace;
+}
+
 .header {
     color: #333;
 }
