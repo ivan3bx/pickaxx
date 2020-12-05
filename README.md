@@ -1,10 +1,18 @@
 # Pickaxx
 
-Standalone web console for managing a Minecraft server instance
+A standalone web console for managing a Minecraft server instance.
+
+![Screenshot](https://user-images.githubusercontent.com/179345/101236138-365c2400-3694-11eb-8337-8f432a09ea6f.png "Screenshot #1")
+
+The goals of this project are as follows:
+* Minimal configuration.
+* A single binary to run the web console.
+* Small memory footprint.
+* Basic authentication
 
 ## Developer Setup
 
-* Makefile uses [go-watch](https://github.com/silenceper/gowatch)
+* See Makefile. This project uses [go-watch](https://github.com/silenceper/gowatch) to run/restart the server.
 
 ## Dependencies
 
