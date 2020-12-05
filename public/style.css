@@ -37,7 +37,7 @@ body > .container {
 .messages {
     overflow:auto;
     margin-top: 56px;
-    margin-bottom: 30px;
+    margin-bottom: 60px;
     background-color: #ffffff;
     overflow:auto;
 }
@@ -55,3 +55,8 @@ body > .container {
     position: fixed!important;
     bottom: 0;
 }
+
+.form-control:focus{
+    outline:0px !important;
+    -webkit-appearance:none;
+    box-shadow: none !important;}

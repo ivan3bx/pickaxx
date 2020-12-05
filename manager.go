@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"net"
+	"os"
 	"os/exec"
 	"time"
 
@@ -34,10 +37,12 @@ var ErrInvalidClient = errors.New("client not valid")
 
 // ProcessManager manages the Minecraft server's process lifecycle.
 type ProcessManager struct {
-	state ServerState
-	stop  chan bool
+	cmdIn   io.Writer
+	fileOut *os.File
 
-	console *consoleInput
+	serverPort int
+	state      ServerState
+	stop       chan bool
 }
 
 // CurrentState is the current running state of the process being managed.
@@ -50,6 +55,10 @@ func (m *ProcessManager) Running() bool {
 	return m.state == Starting || m.state == Running
 }
 
+func (m *ProcessManager) Logfile() string {
+	return m.fileOut.Name()
+}
+
 // Start will initialize a new process, sending all output to the provided
 // io.Writer, and set values on this object to track process state.
 // This will return an error if the process is already running.
@@ -57,16 +66,30 @@ func (m *ProcessManager) Start(w io.Writer) error {
 	if m.state == Running || m.state == Starting {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
-	fmt.Println("State is:", m.state.String())
 
 	// initialize
+	m.serverPort = 25565
 	m.state = Unknown
 	m.stop = make(chan bool, 1)
-
 	m.writeState(w, Starting)
 
+	// set up log file
+	logFile, err := ioutil.TempFile(os.TempDir(), fmt.Sprintf("pickaxx_%d", m.serverPort))
+
+	if err != nil {
+		return err
+	}
+
+	m.fileOut = logFile
+
+	// cmdOut collects all output from this process
+	consoleOut := io.MultiWriter(w, &newlineWriter{logFile})
+
 	go func() {
-		ctx := log.NewContext(context.Background(), log.WithField("action", "startServer"))
+
+		io.WriteString(consoleOut, "Server is starting")
+
+		ctx := log.NewContext(context.Background(), log.WithField("action", "processManager"))
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 
@@ -74,7 +97,19 @@ func (m *ProcessManager) Start(w io.Writer) error {
 		cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
 		cmd.Dir = "testserver"
 
-		pipeCommandOutput(cmd, w)
+		if err := pipeCommandOutput(cmd, consoleOut); err != nil {
+			log.WithError(err).Error("error piping command output")
+			return
+		}
+
+		pipin, err := cmd.StdinPipe()
+
+		if err != nil {
+			log.WithError(err).Error("error connecting command stdinput")
+			return
+		}
+
+		m.cmdIn = pipin
 
 		if err := cmd.Start(); err != nil {
 			log.WithError(err).Error("failed to start command")
@@ -82,10 +117,10 @@ func (m *ProcessManager) Start(w io.Writer) error {
 			return
 		}
 
-		m.console = &consoleInput{stop: m.stop}
-		m.console.connect("localhost:25575", "passw", func() {
-			m.writeState(w, Running)
-		})
+		m.writeState(w, Running)
+
+		// liveness probe
+		go livenessProbe(func() { m.Stop() })
 
 		//
 		// wait until server is stopped
@@ -93,6 +128,7 @@ func (m *ProcessManager) Start(w io.Writer) error {
 
 		<-m.stop
 		m.writeState(w, Stopping)
+		io.WriteString(consoleOut, "Shutting down..")
 
 		go func() {
 			timer := time.NewTimer(time.Second * 10)
@@ -103,18 +139,18 @@ func (m *ProcessManager) Start(w io.Writer) error {
 				log.Debug("timer deadline expired")
 				cancel()
 			}
-
 		}()
 
 		log.Info("clean shutdown starting..")
-		m.console.SendCommand("stop")
+		m.Submit("stop")
+		time.Sleep(time.Second * 5)
 
 		if _, err := cmd.Process.Wait(); err != nil {
 			log.WithError(err).Warn("clean shutdown failed with error")
 		}
 
 		m.writeState(w, Stopped)
-		log.Info("shutdown completed")
+		io.WriteString(consoleOut, "Shutdown complete. Thanks for playing.")
 	}()
 
 	return nil
@@ -130,6 +166,23 @@ func (m *ProcessManager) Stop() error {
 
 	m.stop <- true
 	return nil
+}
+
+// Submit will submit a new command to the underlying minecraft process.
+// Any output is returned asynchonously in the processing loop.
+// Prefixed slash-commands will have slashes trimmed (e.g. "/help" -> "help")
+func (m *ProcessManager) Submit(command string) error {
+	if len(command) == 0 {
+		return errors.New("command is empty")
+	}
+
+	if command[0] == '/' {
+		command = command[1:]
+	}
+
+	cmd := fmt.Sprintf("%s\n", command)
+	_, err := io.WriteString(m.cmdIn, cmd)
+	return err
 }
 
 func pipeCommandOutput(cmd *exec.Cmd, dest io.Writer) error {
@@ -155,9 +208,7 @@ func pipeCommandOutput(cmd *exec.Cmd, dest io.Writer) error {
 
 	go func() {
 		s := bufio.NewScanner(cmdErr)
-		for s.Scan() {
-			dest.Write(s.Bytes())
-		}
+		dest.Write(s.Bytes())
 	}()
 
 	return nil
@@ -168,4 +219,40 @@ func (m *ProcessManager) writeState(w io.Writer, newState ServerState) error {
 	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
 	_, err := w.Write([]byte(jsonString))
 	return err
+}
+
+func livenessProbe(cancel func()) {
+	time.Sleep(time.Second * 15)
+	ticker := time.NewTicker(time.Second * 2)
+	defer cancel()
+
+	for {
+		<-ticker.C
+		if !portOpen("localhost", "25565") {
+			return
+		}
+	}
+}
+
+func portOpen(host string, port string) bool {
+	hostname := net.JoinHostPort(host, port)
+	conn, err := net.DialTimeout("tcp", hostname, time.Second)
+
+	if err != nil || conn == nil {
+		return false
+	}
+
+	conn.Close()
+	return true
+}
+
+type newlineWriter struct {
+	wrapped io.Writer
+}
+
+func (w *newlineWriter) Write(p []byte) (n int, err error) {
+	if n, err := w.wrapped.Write(p); err != nil {
+		return n, err
+	}
+	return w.wrapped.Write([]byte("\n"))
 }

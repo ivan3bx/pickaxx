@@ -29,6 +29,7 @@ func main() {
 		e.GET("/", ph.rootHandler)
 		e.POST("/start", ph.startServerHandler)
 		e.POST("/stop", ph.stopServerHandler)
+		e.POST("/send", ph.sendHandler)
 
 	}
 

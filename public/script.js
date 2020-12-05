@@ -2,6 +2,32 @@
 document.addEventListener("DOMContentLoaded", function () {
     var item = document.getElementsByClassName("messages")[0];
     item.scrollTop = item.scrollHeight;
+
+    document.querySelector('#input-form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        var inputBox = document.querySelector('#input-box')
+
+        if (inputBox.value == "") {
+            return;
+        }
+
+        var xhr = new XMLHttpRequest();
+        xhr.open(this.method, this.action, true);
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.send(JSON.stringify({ "command": inputBox.value }));
+        xhr.onload = function () {
+            inputBox.value = "";
+        }
+    });
+
+    // capture 'slash' keypresses and auto-populate input box
+    document.onkeydown = function (evt) {
+        var inputBox = document.querySelector("#input-box")
+        evt = evt || window.event;
+        if (document.activeElement != inputBox && evt.key == '/') {
+            inputBox.focus();
+        }
+    };
 });
 
 function startServer() {
@@ -64,10 +90,12 @@ if (window["WebSocket"]) {
             }
         }
         if (data.output !== undefined) {
-            var item = document.getElementsByClassName("message-list")[0];
-            item.innerHTML = item.innerHTML + "<li>" + data.output + "</li>";
+            var item = document.querySelector(".message-list");
+            var li = document.createElement("li");
+            li.appendChild(document.createTextNode(data.output));
+            item.appendChild(li);
 
-            item = document.getElementsByClassName("messages")[0];
+            item = document.querySelector(".messages")
             item.scrollTop = item.scrollHeight;
         }
     }

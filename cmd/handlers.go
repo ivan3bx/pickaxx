@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/apex/log"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/ivan3bx/pickaxx"
@@ -30,7 +31,7 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 	)
 
 	if manager.Running() {
-		content, _ := ioutil.ReadFile("testserver/logs/latest.log")
+		content, _ := ioutil.ReadFile(manager.Logfile())
 		lines = strings.Split(string(content), "\n")
 	}
 
@@ -69,6 +70,25 @@ func (h *processHandler) stopServerHandler(c *gin.Context) {
 
 	if err := manager.Stop(); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
+	}
+}
+
+func (h *processHandler) sendHandler(c *gin.Context) {
+	var (
+		manager = h.manager
+	)
+
+	var data = map[string]string{}
+	if err := c.BindJSON(&data); err != nil {
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	cmd := data["command"]
+
+	log.WithField("cmd", cmd).Info("executing command")
+
+	if err := manager.Submit(cmd); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "error submitting command"})
 	}
 }
 
