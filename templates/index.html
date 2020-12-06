@@ -39,6 +39,11 @@
             </div>
 
             <div class="col-10 messages">
+                <div class="drop-zone">
+                    <div class="upload-icon"></div>
+                    <p>To start a new server, drag & drop a <a
+                            href="https://www.minecraft.net/en-us/download/server">server.jar</a>.</p>
+                </div>
                 <ul class="message-list">
                     {{ range $line := .logLines }}
                     <li>{{ $line }}</li>

@@ -1,3 +1,4 @@
+*.taskpaper
 .DS_Store
 testserver/
 bin/

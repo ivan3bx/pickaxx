@@ -38,6 +38,34 @@ body > .container {
     background-color: rgb(68, 91, 22);
 }
 
+.drop-zone {
+    border-radius:10px;
+    border: 3px dashed #e0dddd;
+    padding: 20px 40px;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.dropzone.highlight {
+    background: #ff0;
+}
+
+.drop-zone .upload-icon {
+    content: "";
+    margin-bottom: 1.2em;
+    background-image: url("/assets/grassblock.png");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size:contain;
+    opacity: 0.18;
+    filter: gray; /* IE6-9 */
+    -webkit-filter: grayscale(1); /* Google Chrome, Safari 6+ & Opera 15+ */
+    filter: grayscale(1); /* Microsoft Edge and Firefox 35+ */
+    height: 140px;
+}
+
 .messages {
     overflow:auto;
     margin-top: 56px;
