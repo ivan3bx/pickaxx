@@ -10,7 +10,7 @@
     <script src="assets/bootstrap.min.js"></script>
 
     <script src="assets/reconnecting-websocket.min.js"></script>
-    <script src="assets/script.js"></script>
+    <script type="module" src="assets/script.js"></script>
 </head>
 
 <body>
@@ -19,8 +19,8 @@
             <div class="navbar-brand">/pickaxx/</div>
             <div class="justify-content-end">
                 <input id="startButton" type="button" class="btn btn-primary" value="Start Server"
-                    onclick="startServer();" {{ if (eq .status "Running" ) }} disabled {{ end }}>
-                <input id="stopButton" type="button" class="btn btn-danger" value="Stop Server" onclick="stopServer();"
+                    {{ if (eq .status "Running" ) }} disabled {{ end }}>
+                <input id="stopButton" type="button" class="btn btn-danger" value="Stop Server"
                     {{ if (eq .status "Stopped" ) }} disabled {{ end }}>
             </div>
         </nav>
