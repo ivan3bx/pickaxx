@@ -51,6 +51,7 @@ func main() {
 	{
 		stopWebServer(srv)
 		stopProcesses(processMgr)
+		stopClientManager(clientMgr)
 	}
 	log.Info("shutdown complete")
 }
@@ -62,4 +63,8 @@ func configureLogging(level log.Level) {
 
 func stopProcesses(m *pickaxx.ProcessManager) {
 	m.Stop()
+}
+
+func stopClientManager(cl *pickaxx.ClientManager) {
+	cl.Close()
 }

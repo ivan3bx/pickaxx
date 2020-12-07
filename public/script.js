@@ -1,102 +1,129 @@
+document.addEventListener("DOMContentLoaded", () => {
+    let messages = document.querySelector(".messages");
+    messages.scrollTop = messages.scrollHeight;
 
-document.addEventListener("DOMContentLoaded", function () {
-    var item = document.getElementsByClassName("messages")[0];
-    item.scrollTop = item.scrollHeight;
-
-    document.querySelector('#input-form').addEventListener('submit', function (event) {
+    // Handle input-box submission
+    document.querySelector('#input-form').addEventListener('submit', (event) => {
         event.preventDefault();
-        var inputBox = document.querySelector('#input-box')
+        let inputBox = document.querySelector('#input-box');
 
         if (inputBox.value == "") {
             return;
         }
 
-        var xhr = new XMLHttpRequest();
-        xhr.open(this.method, this.action, true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.send(JSON.stringify({ "command": inputBox.value }));
-        xhr.onload = function () {
+        let xhr = ajaxRequest('POST', event.currentTarget.action);
+        xhr.onload = () => {
             inputBox.value = "";
         }
+        xhr.send(JSON.stringify({ "command": inputBox.value }));
     });
 
-    // capture 'slash' keypresses and auto-populate input box
-    document.onkeydown = function (evt) {
-        var inputBox = document.querySelector("#input-box")
+    // handle keyboard-shortcuts
+    document.onkeydown = (evt) => {
+        let inputBox = document.querySelector("#input-box");
         evt = evt || window.event;
+        // '/' will focus & auto-populate input-box
         if (document.activeElement != inputBox && evt.key == '/') {
             inputBox.focus();
         }
+        if (evt.key == 'l' && evt.ctrlKey) {
+            removeAllChildNodes(document.querySelector(".message-list"));
+        }
     };
+
+    // handle websocket connection
+    initializeWebSockets();
 });
 
 function startServer() {
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/start', true);
-    xhr.onload = function () {
-        console.log(this.responseText);
-    };
-    xhr.onreadystatechange = function () {
-        if (this.readyState == 4 && this.status > 399) {
-            console.log(this.responseText);
-        }
-    }
-    xhr.send("");
+    ajaxRequest('POST', '/start').send();
 };
 
-function stopServer() {
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/stop', true);
-    xhr.onload = function () {
+// Creates a new AJAX POST request
+function ajaxRequest(method, url) {
+    let xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+
+    // debugging
+    xhr.onload = () => {
         console.log(this.responseText);
     };
-    xhr.onreadystatechange = function () {
+
+    xhr.onreadystatechange = () => {
         if (this.readyState == 4 && this.status > 399) {
             console.log(this.responseText);
         }
-    }
-    xhr.send("");
+    };
+
+    return xhr;
+}
+
+function stopServer() {
+    ajaxRequest('POST', '/stop').send();
 };
 
 function logError(errText) {
-    var item = document.getElementsByClassName("message-list")[0];
+    let item = document.querySelector(".message-list");
     item.innerHTML = item.innerHTML + "<li>Error: " + (errText || 'Network request failed') + "</li>";
     item.scrollTop = item.scrollHeight;
 }
 
-/*
-    websocket handling
-*/
-if (window["WebSocket"]) {
-    conn = new ReconnectingWebSocket("ws://" + document.location.host + "/ws");
-    conn.onclose = function (event) {
-        // Are we running or not? Unclear.
-        document.getElementById("startButton").disabled = false;
-        document.getElementById("stopButton").disabled = false;
-    }
-    conn.onmessage = function (event) {
-        var data = JSON.parse(event.data)
+// Websocket handling. Two types of responses are returned:
+//
+// 1. Server output:
+//      { "output" : "text that will appear in the messages-list" }
+//
+// 2. Process status changes:
+//      { "status" : "Starting | Stopping | etc.." }
+//
+function initializeWebSockets() {
+    if (window["WebSocket"]) {
+        let startButton = document.getElementById("startButton");
+        let stopButton = document.getElementById("stopButton");
+        let url = "ws://" + document.location.host + "/ws";
 
-        if (data.status !== undefined) {
-            if (data.status == "Starting" || data.status == "Running") {
-                document.getElementById("startButton").disabled = true;
-                document.getElementById("stopButton").disabled = false;
-            } else if (data.status == "Stopping") {
-                document.getElementById("startButton").disabled = true;
-                document.getElementById("stopButton").disabled = true;
+        conn = new ReconnectingWebSocket(url, null, { debug: true, reconnectInterval: 400 });
+
+        conn.onclose = (event) => {
+            console.log("wss: close event - " + JSON.stringify(event));
+            // Are we running or not? Unclear.
+            startButton.disabled = false;
+            stopButton.disabled = false;
+        }
+
+        conn.onmessage = (event) => {
+            let data = JSON.parse(event.data)
+
+            if (data.status !== undefined) {
+                if (data.status == "Starting" || data.status == "Running") {
+                    startButton.disabled = true;
+                    stopButton.disabled = false;
+                } else if (data.status == "Stopping") {
+                    startButton.disabled = true;
+                    stopButton.disabled = true;
+                } else {
+                    startButton.disabled = false;
+                    stopButton.disabled = true;
+                }
+            } else if (data.output !== undefined) {
+                let item = document.querySelector(".message-list");
+                let li = document.createElement("li");
+
+                li.appendChild(document.createTextNode(data.output));
+                item.appendChild(li);
+
+                item = document.querySelector(".messages")
+                item.scrollTop = item.scrollHeight;
             } else {
-                document.getElementById("startButton").disabled = false;
-                document.getElementById("stopButton").disabled = true;
+                console.log("event undefined:" + JSON.stringify(event));
             }
         }
-        if (data.output !== undefined) {
-            var item = document.querySelector(".message-list");
-            var li = document.createElement("li");
-            li.appendChild(document.createTextNode(data.output));
-            item.appendChild(li);
+    }
+}
 
-            item = document.querySelector(".messages")
-            item.scrollTop = item.scrollHeight;
-        }
+function removeAllChildNodes(parent) {
+    while (parent.firstChild) {
+        parent.removeChild(parent.firstChild);
     }
 }
