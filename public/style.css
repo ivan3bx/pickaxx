@@ -48,8 +48,17 @@ body > .container {
     transform: translate(-50%, -50%);
 }
 
-.dropzone.highlight {
-    background: #ff0;
+.drop-zone.highlight {
+    border-color: rgb(28, 108, 220);
+    color: darkgray;
+}
+
+.drop-zone.highlight a {
+    color: inherit;
+}
+
+.dragging-in-progress {
+    pointer-events: none;
 }
 
 .drop-zone .upload-icon {
