@@ -14,12 +14,26 @@ type websocketClient struct {
 	*websocket.Conn
 }
 
+func (wc *websocketClient) Write(data []byte) error {
+	var (
+		conn = wc.Conn
+		err  error
+	)
+	if err = conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.WithField("host", wc.RemoteAddr()).Warn("failed to write to client")
+		conn.Close()
+	}
+
+	return err
+}
+
 var _ io.Writer = &ClientManager{}
 
 // ClientManager is a collection of clients
 type ClientManager struct {
 	sync.Mutex
 	initialized bool
+	done        chan bool
 	output      chan map[string]interface{}
 	pool        map[string]*websocketClient
 }
@@ -34,17 +48,18 @@ func (c *ClientManager) initialize() {
 
 	c.pool = map[string]*websocketClient{}
 	c.output = make(chan map[string]interface{}, 1)
+	c.done = make(chan bool, 1)
 
-	go func() {
-		for {
-			if val := <-c.output; val != nil {
-				c.broadcast(val)
-				continue
-			}
-		}
-	}()
+	go outputLoop(c, c.done)
+	go pingLoop(c, c.done)
 
 	c.initialized = true
+}
+
+// Close will close any client connections and clean up resources used by this manager.
+func (c *ClientManager) Close() error {
+	c.done <- true
+	return nil
 }
 
 // AddClient adds a new client to this manager
@@ -60,7 +75,7 @@ func (c *ClientManager) AddClient(conn *websocket.Conn) {
 func (c *ClientManager) Write(data []byte) (int, error) {
 	holder := map[string]interface{}{}
 
-	// Send well-formed JSON as-is or wrap it as generic 'output'
+	// Send well-formed JSON as-is; wrap anything else as 'output'
 	if err := json.Unmarshal(data, &holder); err != nil {
 		holder = map[string]interface{}{"output": string(data)}
 	}
@@ -76,15 +91,23 @@ func (c *ClientManager) broadcast(data map[string]interface{}) error {
 		return err
 	}
 
-	for remoteAddr, client := range c.pool {
-		err := client.WriteMessage(websocket.TextMessage, buf.Bytes())
-
-		if err != nil {
-			log.WithField("remoteAddr", remoteAddr).Warn("client disconnected")
-			delete(c.pool, remoteAddr)
-			return err
+	for addr, client := range c.pool {
+		if err := client.Write(buf.Bytes()); err != nil {
+			delete(c.pool, addr)
 		}
 	}
 
 	return nil
+}
+
+func outputLoop(c *ClientManager, done chan bool) {
+	for {
+		select {
+		case val := <-c.output:
+			c.broadcast(val)
+		case <-done:
+			done <- true // propogate
+			return
+		}
+	}
 }

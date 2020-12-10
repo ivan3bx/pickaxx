@@ -55,6 +55,7 @@ func (m *ProcessManager) Running() bool {
 	return m.state == Starting || m.state == Running
 }
 
+// Logfile returns the name of our log file.
 func (m *ProcessManager) Logfile() string {
 	return m.fileOut.Name()
 }

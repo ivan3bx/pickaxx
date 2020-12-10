@@ -83,7 +83,14 @@ func (h *processHandler) sendHandler(c *gin.Context) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
+
 	cmd := data["command"]
+
+	if !manager.Running() {
+		h.writer.Write([]byte("Server not running. Unable to respond to commands."))
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "Server not running."})
+		return
+	}
 
 	log.WithField("cmd", cmd).Info("executing command")
 

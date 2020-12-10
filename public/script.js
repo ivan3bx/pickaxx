@@ -1,102 +1,130 @@
+import * as messageBox from './messages.js';
 
-document.addEventListener("DOMContentLoaded", function () {
-    var item = document.getElementsByClassName("messages")[0];
-    item.scrollTop = item.scrollHeight;
+let inputForm = null;
+let inputBox = null;
+let startButton = null;
+let stopButton = null;
+let fileDrop = null;
 
-    document.querySelector('#input-form').addEventListener('submit', function (event) {
-        event.preventDefault();
-        var inputBox = document.querySelector('#input-box')
+// Creates a new AJAX POST request
+function ajaxRequest(method, url) {
+  const xhr = new XMLHttpRequest();
+  xhr.open(method, url, true);
+  xhr.setRequestHeader('Content-Type', 'application/json');
 
-        if (inputBox.value == "") {
-            return;
-        }
+  // xhr.onload = () => {
+  //   if (xhr.responseText !== '') {
+  //     console.log(xhr.responseText); // debugging
+  //   }
+  // };
 
-        var xhr = new XMLHttpRequest();
-        xhr.open(this.method, this.action, true);
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.send(JSON.stringify({ "command": inputBox.value }));
-        xhr.onload = function () {
-            inputBox.value = "";
-        }
+  // xhr.onreadystatechange = () => {
+  //   if (xhr.readyState === 4 && xhr.status > 399) {
+  //     console.log(xhr.responseText);
+  //   }
+  // };
+
+  return xhr;
+}
+
+function sendCommand(event) {
+  event.preventDefault();
+
+  if (inputBox.value === '') {
+    return;
+  }
+
+  const xhr = ajaxRequest('POST', event.currentTarget.action);
+
+  xhr.onload = () => {
+    inputBox.value = '';
+  };
+
+  xhr.send(JSON.stringify({ command: inputBox.value }));
+}
+
+const app = {
+  init: () => {
+    // DOM fields
+    inputForm = document.querySelector('#input-form');
+    inputBox = document.querySelector('#input-box');
+    startButton = document.getElementById('startButton');
+    stopButton = document.getElementById('stopButton');
+    fileDrop = document.querySelector('.drop-zone');
+
+    // setup initial state
+    inputForm.addEventListener('submit', sendCommand);
+    startButton.addEventListener('click', () => { ajaxRequest('POST', '/start').send(); });
+    stopButton.addEventListener('click', () => { ajaxRequest('POST', '/stop').send(); });
+
+    fileDrop.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      for (let i = 0; i < fileDrop.children.length; i += 1) {
+        fileDrop.children[i].classList.add('dragging-in-progress');
+      }
+
+      fileDrop.classList.add('highlight');
+      return false;
     });
 
-    // capture 'slash' keypresses and auto-populate input box
-    document.onkeydown = function (evt) {
-        var inputBox = document.querySelector("#input-box")
-        evt = evt || window.event;
-        if (document.activeElement != inputBox && evt.key == '/') {
-            inputBox.focus();
-        }
-    };
-});
+    fileDrop.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
 
-function startServer() {
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/start', true);
-    xhr.onload = function () {
-        console.log(this.responseText);
-    };
-    xhr.onreadystatechange = function () {
-        if (this.readyState == 4 && this.status > 399) {
-            console.log(this.responseText);
-        }
+      for (let i = 0; i < fileDrop.children.length; i += 1) {
+        fileDrop.children[i].classList.remove('dragging-in-progress');
+      }
+
+      fileDrop.classList.remove('highlight');
+      return false;
+    });
+
+    fileDrop.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    });
+
+    fileDrop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      for (let i = 0; i < fileDrop.children.length; i += 1) {
+        fileDrop.children[i].classList.remove('dragging-in-progress');
+      }
+      fileDrop.classList.remove('highlight');
+
+      console.log(`filename:${e.dataTransfer.files.item(0).name}`);
+      console.log(`fileSize:${e.dataTransfer.files.item(0).size}`); // bytes (37,961,464)
+      console.log(`fileType:${e.dataTransfer.files.item(0).type}`); // should be 'application/java-archive'
+    });
+
+    messageBox.init(startButton, stopButton);
+    messageBox.resetScroll();
+
+    // check for WebSocket support (required).
+    if (window.WebSocket === undefined) {
+      console.error('WebSocket support not found.');
     }
-    xhr.send("");
+  },
 };
 
-function stopServer() {
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/stop', true);
-    xhr.onload = function () {
-        console.log(this.responseText);
-    };
-    xhr.onreadystatechange = function () {
-        if (this.readyState == 4 && this.status > 399) {
-            console.log(this.responseText);
-        }
-    }
-    xhr.send("");
-};
+// Handle key-down events.
+function handleKeyDown(evt) {
+  const event = evt || window.event;
 
-function logError(errText) {
-    var item = document.getElementsByClassName("message-list")[0];
-    item.innerHTML = item.innerHTML + "<li>Error: " + (errText || 'Network request failed') + "</li>";
-    item.scrollTop = item.scrollHeight;
+  if (document.activeElement !== inputBox && event.key === '/') {
+    // '/' will focus & auto-populate input-box
+    inputBox.focus();
+  }
+
+  if (event.key === 'l' && event.ctrlKey) {
+    // ctrl-l will clear the screen
+    messageBox.clear();
+  }
 }
 
-/*
-    websocket handling
-*/
-if (window["WebSocket"]) {
-    conn = new ReconnectingWebSocket("ws://" + document.location.host + "/ws");
-    conn.onclose = function (event) {
-        // Are we running or not? Unclear.
-        document.getElementById("startButton").disabled = false;
-        document.getElementById("stopButton").disabled = false;
-    }
-    conn.onmessage = function (event) {
-        var data = JSON.parse(event.data)
-
-        if (data.status !== undefined) {
-            if (data.status == "Starting" || data.status == "Running") {
-                document.getElementById("startButton").disabled = true;
-                document.getElementById("stopButton").disabled = false;
-            } else if (data.status == "Stopping") {
-                document.getElementById("startButton").disabled = true;
-                document.getElementById("stopButton").disabled = true;
-            } else {
-                document.getElementById("startButton").disabled = false;
-                document.getElementById("stopButton").disabled = true;
-            }
-        }
-        if (data.output !== undefined) {
-            var item = document.querySelector(".message-list");
-            var li = document.createElement("li");
-            li.appendChild(document.createTextNode(data.output));
-            item.appendChild(li);
-
-            item = document.querySelector(".messages")
-            item.scrollTop = item.scrollHeight;
-        }
-    }
-}
+document.addEventListener('DOMContentLoaded', app.init);
+document.onkeydown = handleKeyDown;
