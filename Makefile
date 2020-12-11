@@ -9,7 +9,7 @@ clean:
 	@rm -rf ./bin/*
 
 test:
-	@go test ./...
+	@go test -race ./...
 
 list:
 	@$(MAKE) -rpn | sed -n -e '/^$$/ { n ; /^[^ .#][^ ]*:/ { s/:.*$$// ; p ; } ; }' | egrep --color '^[^ ]*'
