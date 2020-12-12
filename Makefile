@@ -9,7 +9,12 @@ clean:
 	@rm -rf ./bin/*
 
 test:
-	@go test -race ./...
+ifneq (,$(shell which staticcheck))
+	$(shell staticcheck ./...)
+else
+	@echo "skipping go check"
+endif
+	go test -race ./...
 
 list:
 	@$(MAKE) -rpn | sed -n -e '/^$$/ { n ; /^[^ .#][^ ]*:/ { s/:.*$$// ; p ; } ; }' | egrep --color '^[^ ]*'
