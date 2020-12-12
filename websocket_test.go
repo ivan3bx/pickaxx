@@ -1,4 +1,4 @@
-package pickaxx_test
+package pickaxx
 
 import (
 	"fmt"
@@ -94,7 +94,6 @@ func (c *TestClient) Connect(url string) <-chan WebSocketData {
 			tt, mess, err := c.ReadMessage()
 			if err != nil {
 				close(c.out)
-				c.out = nil
 				return
 			}
 			c.out <- WebSocketData{tt, mess}
@@ -107,7 +106,7 @@ func (c *TestClient) Connect(url string) <-chan WebSocketData {
 // WaitReceive will wait the specified timeout period for a websocket message containing the
 // given expectedType and expectedData.  If 'expectedData' is empty, it will be ignored.
 func (c *TestClient) WaitReceive(expectedType int, dataRegex string) error {
-	const timeout = time.Millisecond * 400
+	const timeout = time.Millisecond * 200
 
 	if dataRegex == "" {
 		dataRegex = ".*"
@@ -122,7 +121,11 @@ func (c *TestClient) WaitReceive(expectedType int, dataRegex string) error {
 		select {
 		case <-timer.C:
 			return fmt.Errorf("timeout waiting for match for '%s'", dataRegex)
-		case actual := <-c.out:
+		case actual, ok := <-c.out:
+			if !ok {
+				return fmt.Errorf("client channel was closed waiting for '%s'", dataRegex)
+			}
+
 			if actual.messageType == expectedType && rxp.Match(actual.data) {
 				return nil
 			}

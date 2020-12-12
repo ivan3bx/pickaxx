@@ -1,12 +1,16 @@
-package pickaxx_test
+package pickaxx
 
 import (
 	"testing"
 
+	"github.com/apex/log"
 	"github.com/gorilla/websocket"
-	"github.com/ivan3bx/pickaxx"
 	"github.com/stretchr/testify/assert"
 )
+
+func init() {
+	log.SetLevel(log.ErrorLevel)
+}
 
 func TestClientManager(t *testing.T) {
 
@@ -22,7 +26,7 @@ func TestClientManager(t *testing.T) {
 		{
 			name: "adding client starts pinging",
 			checkFunc: func(t *testing.T, client *TestClient) {
-				m := pickaxx.ClientManager{}
+				m := ClientManager{}
 				defer m.Close()
 
 				m.AddClient(<-server.ConnectedSockets)
@@ -30,9 +34,22 @@ func TestClientManager(t *testing.T) {
 			},
 		},
 		{
+			name: "removes client if pings fail",
+			checkFunc: func(t *testing.T, client *TestClient) {
+				m := ClientManager{}
+				defer m.Close()
+
+				serverConn := <-server.ConnectedSockets // fetch new connection
+				serverConn.Close()                      // close it
+				m.AddClient(serverConn)                 // add client (writes should fail)
+
+				assert.Error(t, client.WaitReceive(websocket.PingMessage, ""))
+			},
+		},
+		{
 			name: "server wraps plain text as JSON to client",
 			checkFunc: func(t *testing.T, client *TestClient) {
-				m := pickaxx.ClientManager{}
+				m := ClientManager{}
 				defer m.Close()
 
 				m.AddClient(<-server.ConnectedSockets)
@@ -44,7 +61,7 @@ func TestClientManager(t *testing.T) {
 		{
 			name: "server serializes JSON directly to client",
 			checkFunc: func(t *testing.T, client *TestClient) {
-				m := pickaxx.ClientManager{}
+				m := ClientManager{}
 				defer m.Close()
 
 				m.AddClient(<-server.ConnectedSockets)
