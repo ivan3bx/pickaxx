@@ -1,10 +1,10 @@
 package pickaxx
 
 import (
-	"bytes"
 	"encoding/json"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/apex/log"
 	"github.com/gorilla/websocket"
@@ -31,18 +31,17 @@ var _ io.Writer = &ClientManager{}
 
 // ClientManager is a collection of clients
 type ClientManager struct {
-	sync.Mutex
-	initialized bool
-	done        chan bool
-	output      chan map[string]interface{}
-	pool        map[string]*websocketClient
+	mutex  sync.Mutex
+	done   chan bool
+	output chan map[string]interface{}
+	pool   map[string]*websocketClient
 }
 
 func (c *ClientManager) initialize() {
-	c.Lock()
-	defer c.Unlock()
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 
-	if c.initialized {
+	if c.pool != nil {
 		return
 	}
 
@@ -51,9 +50,6 @@ func (c *ClientManager) initialize() {
 	c.done = make(chan bool, 1)
 
 	go outputLoop(c, c.done)
-	go pingLoop(c, c.done)
-
-	c.initialized = true
 }
 
 // Close will close any client connections and clean up resources used by this manager.
@@ -67,6 +63,21 @@ func (c *ClientManager) AddClient(conn *websocket.Conn) {
 	c.initialize()
 	client := websocketClient{conn}
 	c.pool[conn.RemoteAddr().String()] = &client
+
+	// pinger
+	go func() {
+		ticker := time.NewTicker(frequency)
+		defer ticker.Stop()
+
+		for {
+			if err := ping(client.Conn); err != nil {
+				delete(c.pool, conn.RemoteAddr().String())
+				client.Close()
+				return
+			}
+			<-ticker.C
+		}
+	}()
 }
 
 // Write will send data down a channel to be sent to clients. This
@@ -85,18 +96,11 @@ func (c *ClientManager) Write(data []byte) (int, error) {
 }
 
 func (c *ClientManager) broadcast(data map[string]interface{}) error {
-	buf := bytes.Buffer{}
-
-	if err := json.NewEncoder(&buf).Encode(&data); err != nil {
-		return err
-	}
-
 	for addr, client := range c.pool {
-		if err := client.Write(buf.Bytes()); err != nil {
+		if err := client.WriteJSON(data); err != nil {
 			delete(c.pool, addr)
 		}
 	}
-
 	return nil
 }
 
