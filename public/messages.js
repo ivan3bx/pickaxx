@@ -74,6 +74,8 @@ function init(startButton, stopButton) {
 
   conn.onmessage = handleMessage;
   conn.onclose = handleClose;
+
+  resetScroll();
 }
 
-export { init, resetScroll, clear };
+export { init, clear };
