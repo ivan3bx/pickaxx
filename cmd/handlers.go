@@ -2,7 +2,10 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 
 	"io/ioutil"
 	"net/http"
@@ -30,9 +33,8 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 		lines   []string
 	)
 
-	if manager.Running() {
-		content, _ := ioutil.ReadFile(manager.Logfile())
-		lines = strings.Split(string(content), "\n")
+	if manager.Active() {
+		lines = manager.RecentActivity()
 	}
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
@@ -63,6 +65,43 @@ func (h *processHandler) startServerHandler(c *gin.Context) {
 	}
 }
 
+func (h *processHandler) createServerHandler(c *gin.Context) {
+	var (
+		tempFile *os.File
+		err      error
+	)
+
+	file, err := c.FormFile("file")
+
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "file not received"})
+		return
+	}
+
+	if file.Header.Get("Content-Type") != "application/java-archive" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "unsupported file type"})
+		return
+	}
+
+	ext := filepath.Ext(file.Filename)
+	filename := strings.TrimSuffix(file.Filename, ext)
+
+	if tempFile, err = ioutil.TempFile("", fmt.Sprintf("%s-*%s", filename, ext)); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": "unable to write save file"})
+		return
+	}
+
+	if err := c.SaveUploadedFile(file, tempFile.Name()); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": "unable to save file"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"output": "file is staged",
+		"key":    filepath.Base(tempFile.Name()),
+	})
+}
+
 func (h *processHandler) stopServerHandler(c *gin.Context) {
 	var (
 		manager = h.manager
@@ -86,7 +125,7 @@ func (h *processHandler) sendHandler(c *gin.Context) {
 
 	cmd := data["command"]
 
-	if !manager.Running() {
+	if !manager.Active() {
 		h.writer.Write([]byte("Server not running. Unable to respond to commands."))
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "Server not running."})
 		return

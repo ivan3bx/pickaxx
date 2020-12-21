@@ -57,6 +57,16 @@ body > .container {
     color: inherit;
 }
 
+.drop-zone.alert-box {
+    animation: blink 300ms;
+    animation-iteration-count: 3;
+}
+
+@keyframes blink {
+    50% { border-color:red ; }
+    100% { border-color: #e0dddd; }
+}
+
 .dragging-in-progress {
     pointer-events: none;
 }
