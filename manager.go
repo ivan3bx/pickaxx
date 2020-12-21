@@ -17,7 +17,7 @@ import (
 
 const (
 	// MaxMem is the maximum allocated memory
-	x MaxMem = "-Xmx1024m"
+	MaxMem = "-Xmx1024m"
 
 	// MinMem is the minimum allocated memory
 	MinMem = "-Xms512m"
@@ -86,8 +86,10 @@ func (m *ProcessManager) Start(w io.Writer) error {
 	// cmdOut collects all output from this process
 	consoleOut := io.MultiWriter(w, &newlineWriter{logFile})
 
-	go func() {
+	myMap := map[string]bool{}
 
+	go func() {
+		myMap["foo"] = true
 		io.WriteString(consoleOut, "Server is starting")
 
 		ctx := log.NewContext(context.Background(), log.WithField("action", "processManager"))
@@ -132,6 +134,7 @@ func (m *ProcessManager) Start(w io.Writer) error {
 		io.WriteString(consoleOut, "Shutting down..")
 
 		go func() {
+			myMap["foo"] = false
 			timer := time.NewTimer(time.Second * 10)
 
 			select {
@@ -153,7 +156,7 @@ func (m *ProcessManager) Start(w io.Writer) error {
 		m.writeState(w, Stopped)
 		io.WriteString(consoleOut, "Shutdown complete. Thanks for playing.")
 	}()
-
+	fmt.Println(myMap["foo"])
 	return nil
 }
 

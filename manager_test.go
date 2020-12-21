@@ -1,6 +1,7 @@
 package pickaxx
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,7 @@ func TestNewServerManager(t *testing.T) {
 	m := &ProcessManager{}
 
 	t.Run("state initialized", func(t *testing.T) {
+		m.Start(&bytes.Buffer{})
 		assert.Equal(t, Unknown.String(), m.state.String())
 	})
 
