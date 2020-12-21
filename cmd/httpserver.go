@@ -7,14 +7,16 @@ import (
 
 	"github.com/apex/log"
 	"github.com/gin-gonic/gin"
+	"github.com/gobuffalo/packr/v2"
 )
 
 func newRouter() *gin.Engine {
 	e := gin.New()
 	e.Use(gin.Logger(), gin.Recovery())
 
-	e.Static("/assets", "public")
-	e.LoadHTMLFiles("templates/index.html")
+	assets := packr.New("assets", "./public")
+
+	e.StaticFS("/assets", assets)
 	return e
 }
 
