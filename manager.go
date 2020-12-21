@@ -1,16 +1,14 @@
 package pickaxx
 
 import (
-	"bufio"
-	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"os"
 	"os/exec"
-	"time"
+	"strings"
+	"sync"
 
 	"github.com/apex/log"
 )
@@ -24,6 +22,14 @@ const (
 
 	// JarFile is the name of the server jar as it exists on disk
 	JarFile = "server.jar"
+
+	// DefaultPort is the default minecraft server port
+	DefaultPort = 25565
+)
+
+var (
+	// DefaultCommand is the name of the executable.
+	DefaultCommand = []string{"java", MaxMem, MinMem, "-jar", JarFile, "nogui"}
 )
 
 // ErrProcessExists exists when a new server process can not be started.
@@ -37,42 +43,62 @@ var ErrInvalidClient = errors.New("client not valid")
 
 // ProcessManager manages the Minecraft server's process lifecycle.
 type ProcessManager struct {
+	// Command is the command & arguments passed when 'Start()' is
+	// invoked. If not set, it will default to 'DefaultExecArgs'.
+	Command []string
+
+	cmd     *exec.Cmd
 	cmdIn   io.Writer
+	cmdOut  io.Writer // output to any/all places
 	fileOut *os.File
 
 	serverPort int
-	state      ServerState
-	stop       chan bool
+
+	// state transition
+	state     ServerState
+	lock      sync.RWMutex
+	nextState chan ServerState
+
+	// observers of state transitions
+	notifier StatusNotifier
 }
 
-// CurrentState is the current running state of the process being managed.
-func (m *ProcessManager) CurrentState() ServerState {
-	return m.state
+func (m *ProcessManager) registerObserver(states ...ServerState) <-chan ServerState {
+	return m.notifier.Register(states)
 }
 
-// Running returns whether the process is running / active.
-func (m *ProcessManager) Running() bool {
-	return m.state == Starting || m.state == Running
+func (m *ProcessManager) unregister(ch <-chan ServerState) {
+	m.notifier.Unregister(ch)
 }
 
-// Logfile returns the name of our log file.
-func (m *ProcessManager) Logfile() string {
-	return m.fileOut.Name()
+// RecentActivity will return the latest content contained in
+// this server's log file.
+func (m *ProcessManager) RecentActivity() []string {
+	if m.fileOut == nil {
+		return []string{}
+	}
+	content, _ := ioutil.ReadFile(m.fileOut.Name())
+	return strings.Split(string(content), "\n")
 }
 
 // Start will initialize a new process, sending all output to the provided
 // io.Writer, and set values on this object to track process state.
 // This will return an error if the process is already running.
 func (m *ProcessManager) Start(w io.Writer) error {
-	if m.state == Running || m.state == Starting {
+	if m.Active() {
 		return fmt.Errorf("server already running: %w", ErrProcessExists)
 	}
 
 	// initialize
-	m.serverPort = 25565
-	m.state = Unknown
-	m.stop = make(chan bool, 1)
-	m.writeState(w, Starting)
+	if len(m.Command) == 0 {
+		m.Command = DefaultCommand
+	}
+
+	if m.serverPort == 0 {
+		m.serverPort = DefaultPort
+	}
+
+	m.nextState = make(chan ServerState, 1)
 
 	// set up log file
 	logFile, err := ioutil.TempFile(os.TempDir(), fmt.Sprintf("pickaxx_%d", m.serverPort))
@@ -83,77 +109,12 @@ func (m *ProcessManager) Start(w io.Writer) error {
 
 	m.fileOut = logFile
 
-	// cmdOut collects all output from this process
-	consoleOut := io.MultiWriter(w, &newlineWriter{logFile})
+	// cmdOut collects all output from this process & sends it to both clients & logfile
+	m.cmdOut = io.MultiWriter(w, &newlineWriter{logFile})
 
-	go func() {
+	go eventLoop(m, w)
 
-		io.WriteString(consoleOut, "Server is starting")
-
-		ctx := log.NewContext(context.Background(), log.WithField("action", "processManager"))
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		log := log.FromContext(ctx)
-		cmd := exec.CommandContext(ctx, "java", MaxMem, MinMem, "-jar", JarFile, "nogui")
-		cmd.Dir = "testserver"
-
-		if err := pipeCommandOutput(cmd, consoleOut); err != nil {
-			log.WithError(err).Error("error piping command output")
-			return
-		}
-
-		pipin, err := cmd.StdinPipe()
-
-		if err != nil {
-			log.WithError(err).Error("error connecting command stdinput")
-			return
-		}
-
-		m.cmdIn = pipin
-
-		if err := cmd.Start(); err != nil {
-			log.WithError(err).Error("failed to start command")
-			m.writeState(w, Stopped)
-			return
-		}
-
-		m.writeState(w, Running)
-
-		// liveness probe
-		go livenessProbe(func() { m.Stop() })
-
-		//
-		// wait until server is stopped
-		//
-
-		<-m.stop
-		m.writeState(w, Stopping)
-		io.WriteString(consoleOut, "Shutting down..")
-
-		go func() {
-			timer := time.NewTimer(time.Second * 10)
-
-			select {
-			case <-ctx.Done():
-			case <-timer.C:
-				log.Debug("timer deadline expired")
-				cancel()
-			}
-		}()
-
-		log.Info("clean shutdown starting..")
-		m.Submit("stop")
-		time.Sleep(time.Second * 5)
-
-		if _, err := cmd.Process.Wait(); err != nil {
-			log.WithError(err).Warn("clean shutdown failed with error")
-		}
-
-		m.writeState(w, Stopped)
-		io.WriteString(consoleOut, "Shutdown complete. Thanks for playing.")
-	}()
-
+	m.nextState <- Starting
 	return nil
 }
 
@@ -161,11 +122,14 @@ func (m *ProcessManager) Start(w io.Writer) error {
 // shutdown command. This will also kill the process if it
 // does not respond in a given timeframe.
 func (m *ProcessManager) Stop() error {
-	if !m.Running() {
+	log := log.WithField("action", "ProcessManager.Stop()")
+
+	if !m.Active() {
+		log.Info("not running")
 		return ErrNoProcess
 	}
 
-	m.stop <- true
+	m.nextState <- Stopping
 	return nil
 }
 
@@ -173,6 +137,10 @@ func (m *ProcessManager) Stop() error {
 // Any output is returned asynchonously in the processing loop.
 // Prefixed slash-commands will have slashes trimmed (e.g. "/help" -> "help")
 func (m *ProcessManager) Submit(command string) error {
+	if !m.CanAcceptCommands() {
+		return ErrNoProcess
+	}
+
 	if len(command) == 0 {
 		return errors.New("command is empty")
 	}
@@ -183,77 +151,91 @@ func (m *ProcessManager) Submit(command string) error {
 
 	cmd := fmt.Sprintf("%s\n", command)
 	_, err := io.WriteString(m.cmdIn, cmd)
+
 	return err
 }
 
-func pipeCommandOutput(cmd *exec.Cmd, dest io.Writer) error {
+// CurrentState is the current running state of the process being managed.
+func (m *ProcessManager) CurrentState() ServerState {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	return m.state
+}
+
+// Active returns whether the process is running.
+func (m *ProcessManager) Active() bool {
+	return m.currentStateIn(Starting, Running)
+}
+
+// CanAcceptCommands returns true if this instance can direct commands
+// through to the process.
+func (m *ProcessManager) CanAcceptCommands() bool {
+	return m.currentStateIn(Running, Stopping)
+}
+
+// eventLoop processes state transitions for a process manager and
+// writes a log of activity to the given writer.
+func eventLoop(m *ProcessManager, w io.Writer) {
 	var (
-		cmdOut, cmdErr io.Reader
-		err            error
+		log      = log.WithField("action", "eventLoop")
+		cmd      *exec.Cmd
+		newState ServerState
 	)
 
-	if cmdOut, err = cmd.StdoutPipe(); err != nil {
-		return err
-	}
-
-	if cmdErr, err = cmd.StderrPipe(); err != nil {
-		return err
-	}
-
-	go func() {
-		s := bufio.NewScanner(cmdOut)
-		for s.Scan() {
-			dest.Write(s.Bytes())
-		}
-	}()
-
-	go func() {
-		s := bufio.NewScanner(cmdErr)
-		dest.Write(s.Bytes())
-	}()
-
-	return nil
-}
-
-func (m *ProcessManager) writeState(w io.Writer, newState ServerState) error {
-	m.state = newState
-	jsonString := fmt.Sprintf(`{"status":"%s"}`, newState.String())
-	_, err := w.Write([]byte(jsonString))
-	return err
-}
-
-func livenessProbe(cancel func()) {
-	time.Sleep(time.Second * 15)
-	ticker := time.NewTicker(time.Second * 2)
-	defer cancel()
-
 	for {
-		<-ticker.C
-		if !portOpen("localhost", "25565") {
+		newState = <-m.nextState
+
+		m.lock.Lock()
+		log.WithField("state", fmt.Sprintf("%v->%v", m.state, newState)).Info("state transition")
+		m.state = newState
+		m.lock.Unlock()
+
+		switch newState {
+		case Starting:
+			cmd, _ = startServer(m)
+		case Running:
+			stop := m.registerObserver(Stopping, Stopped)
+			go m.startLivenessProbe(stop)
+		case Stopping:
+			stopServer(m, cmd)
+		case Stopped:
+			io.WriteString(m.cmdOut, "Shutdown complete. Thanks for playing.")
+		}
+
+		m.notifier.Notify(newState)
+
+		newState.writeJSON(w)
+
+		if newState == Stopped {
 			return
 		}
 	}
 }
 
-func portOpen(host string, port string) bool {
-	hostname := net.JoinHostPort(host, port)
-	conn, err := net.DialTimeout("tcp", hostname, time.Second)
-
-	if err != nil || conn == nil {
-		return false
+// currentStateIn returns true if the current process is in any
+// of the provided states.
+func (m *ProcessManager) currentStateIn(states ...ServerState) bool {
+	m.lock.RLock()
+	defer m.lock.RUnlock()
+	for _, s := range states {
+		if m.state == s {
+			return true
+		}
 	}
-
-	conn.Close()
-	return true
+	return false
 }
 
-type newlineWriter struct {
-	wrapped io.Writer
-}
+func (m *ProcessManager) startLivenessProbe(onStop <-chan ServerState) {
+	check := portChecker{
+		stop: onStop,
+		cancel: func() {
+			if m.Active() {
+				io.WriteString(m.cmdOut, "Java process not responding. Initiating shutdown.")
+				log.WithField("action", "livenessProbe()").Warn("probe failed")
+				m.Stop()
 
-func (w *newlineWriter) Write(p []byte) (n int, err error) {
-	if n, err := w.wrapped.Write(p); err != nil {
-		return n, err
+			}
+		},
 	}
-	return w.wrapped.Write([]byte("\n"))
+	go check.Run("localhost", fmt.Sprintf("%d", m.serverPort))
 }

@@ -1,5 +1,10 @@
 package pickaxx
 
+import (
+	"fmt"
+	"io"
+)
+
 //go:generate stringer -type=ServerState -trimprefix=Server         -output=enums_string.go
 
 //ServerState describes the current state of a Minecraft server.
@@ -13,3 +18,9 @@ const (
 	Stopping
 	Stopped
 )
+
+func (state ServerState) writeJSON(w io.Writer) error {
+	jsonString := fmt.Sprintf(`{"status":"%s"}`, state.String())
+	_, err := w.Write([]byte(jsonString))
+	return err
+}

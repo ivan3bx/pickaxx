@@ -33,9 +33,8 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 		lines   []string
 	)
 
-	if manager.Running() {
-		content, _ := ioutil.ReadFile(manager.Logfile())
-		lines = strings.Split(string(content), "\n")
+	if manager.Active() {
+		lines = manager.RecentActivity()
 	}
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
@@ -126,7 +125,7 @@ func (h *processHandler) sendHandler(c *gin.Context) {
 
 	cmd := data["command"]
 
-	if !manager.Running() {
+	if !manager.Active() {
 		h.writer.Write([]byte("Server not running. Unable to respond to commands."))
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "Server not running."})
 		return
