@@ -17,7 +17,7 @@ import (
 
 const (
 	// MaxMem is the maximum allocated memory
-	MaxMem = "-Xmx1024m"
+	x MaxMem = "-Xmx1024m"
 
 	// MinMem is the minimum allocated memory
 	MinMem = "-Xms512m"
