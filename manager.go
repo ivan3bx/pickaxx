@@ -25,6 +25,9 @@ const (
 
 	// DefaultPort is the default minecraft server port
 	DefaultPort = 25565
+
+	// DefaultWorkingDir is the default working directory
+	DefaultWorkingDir = "testserver"
 )
 
 var (
@@ -46,6 +49,10 @@ type ProcessManager struct {
 	// Command is the command & arguments passed when 'Start()' is
 	// invoked. If not set, it will default to 'DefaultExecArgs'.
 	Command []string
+
+	// WorkingDir is our starting directory. If not set, will default
+	// to 'DefaultWorkignDir'
+	WorkingDir string
 
 	cmd     *exec.Cmd
 	cmdIn   io.Writer
@@ -98,6 +105,10 @@ func (m *ProcessManager) Start(w io.Writer) error {
 		m.serverPort = DefaultPort
 	}
 
+	if m.WorkingDir == "" {
+		m.WorkingDir = DefaultWorkingDir
+	}
+
 	m.nextState = make(chan ServerState, 1)
 
 	// set up log file
@@ -111,6 +122,10 @@ func (m *ProcessManager) Start(w io.Writer) error {
 
 	// cmdOut collects all output from this process & sends it to both clients & logfile
 	m.cmdOut = io.MultiWriter(w, &newlineWriter{logFile})
+
+	if _, err := os.Stat(m.WorkingDir); err != nil {
+		return fmt.Errorf("invalid working directory: '%w'", err)
+	}
 
 	go eventLoop(m, w)
 

@@ -15,7 +15,7 @@ func startServer(m *ProcessManager) (*exec.Cmd, error) {
 	log := log.FromContext(ctx)
 
 	cmd := exec.CommandContext(ctx, m.Command[0], m.Command[1:]...)
-	cmd.Dir = "testserver"
+	cmd.Dir = m.WorkingDir
 
 	io.WriteString(m.cmdOut, "Server is starting")
 

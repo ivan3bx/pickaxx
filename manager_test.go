@@ -1,6 +1,7 @@
 package pickaxx
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -86,7 +87,8 @@ func TestNewServerManager(t *testing.T) {
 
 				// new process manager
 				m = &ProcessManager{
-					Command: []string{"cat"}, // simple input/output executable
+					Command:    []string{"cat"}, // simple input/output executable
+					WorkingDir: os.TempDir(),
 				}
 
 				// create channels to observe state transitions
@@ -94,11 +96,12 @@ func TestNewServerManager(t *testing.T) {
 				runningCh := m.registerObserver(Running)
 
 				defer func() {
-					// test process won't shut-down gracefully, so do it the hard way
-					m.cmd.Process.Kill()
-					m.Stop()
-					<-stopCh
-
+					if m.cmd != nil {
+						// test process won't shut-down gracefully, so do it the hard way
+						m.cmd.Process.Kill()
+						m.Stop()
+						<-stopCh
+					}
 					m.unregister(stopCh)
 					m.unregister(runningCh)
 				}()
@@ -106,7 +109,10 @@ func TestNewServerManager(t *testing.T) {
 				writer = &safeStringBuilder{Builder: &strings.Builder{}}
 
 				// Start the server
-				m.Start(writer)
+				if !assert.NoError(t, m.Start(writer)) {
+					return
+				}
+
 				<-runningCh
 
 				// Run our test
