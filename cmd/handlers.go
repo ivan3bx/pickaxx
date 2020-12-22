@@ -14,7 +14,6 @@ import (
 
 	"github.com/apex/log"
 	"github.com/gin-gonic/gin"
-	"github.com/gobuffalo/packr/v2"
 	"github.com/gorilla/websocket"
 	"github.com/ivan3bx/pickaxx"
 )
@@ -39,7 +38,6 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 		lines = manager.RecentActivity()
 	}
 
-	tmpls := packr.New("templates", "../templates")
 	html, err := tmpls.FindString("index.html")
 
 	if err != nil {

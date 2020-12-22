@@ -10,11 +10,14 @@ import (
 	"github.com/gobuffalo/packr/v2"
 )
 
+var (
+	assets = packr.New("assets", "../public")
+	tmpls  = packr.New("templates", "../templates")
+)
+
 func newRouter() *gin.Engine {
 	e := gin.New()
 	e.Use(gin.Logger(), gin.Recovery())
-
-	assets := packr.New("assets", "./public")
 
 	e.StaticFS("/assets", assets)
 	return e

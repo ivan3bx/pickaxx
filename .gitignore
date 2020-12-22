@@ -3,3 +3,8 @@
 testserver/
 bin/
 node_modules/
+dist/
+
+# packr
+main-packr.go
+packrd/
