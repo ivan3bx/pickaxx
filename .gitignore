@@ -1,7 +1,6 @@
 *.taskpaper
 .DS_Store
 testserver/
-bin/
 node_modules/
 dist/
 
