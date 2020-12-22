@@ -3,6 +3,7 @@ GIT_HASH    := $(shell echo $(VERSION) | cut -c 1-7)
 
 serve:
 	@mkdir -p ./bin
+	@packr2 clean
 	@gowatch -o ./bin/pickaxx -p ./cmd/
 
 clean:

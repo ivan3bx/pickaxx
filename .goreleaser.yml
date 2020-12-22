@@ -1,0 +1,32 @@
+before:
+  hooks:
+    - go mod download
+    - packr2 build
+builds:
+  - id: "main"
+    dir: ./cmd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm
+    goarm:
+      - 7
+archives:
+  - replacements:
+      386: i386
+      amd64: x86_64
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^(?i)wip\b'
+      - '^docs:'
+      - '^test:'

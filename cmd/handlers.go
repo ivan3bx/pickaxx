@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"os"
 	"path/filepath"
@@ -37,10 +38,25 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 		lines = manager.RecentActivity()
 	}
 
-	c.HTML(http.StatusOK, "index.html", gin.H{
+	html, err := tmpls.FindString("index.html")
+
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+
+	t := template.New("")
+	t.Parse(html)
+
+	err = t.ExecuteTemplate(c.Writer, "", gin.H{
 		"logLines": lines,
 		"status":   manager.CurrentState().String(),
 	})
+
+	if err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
 }
 
 func (h *processHandler) startServerHandler(c *gin.Context) {
