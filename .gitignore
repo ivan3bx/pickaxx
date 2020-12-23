@@ -1,5 +1,6 @@
 *.taskpaper
 .DS_Store
+.vscode
 testserver/
 node_modules/
 dist/

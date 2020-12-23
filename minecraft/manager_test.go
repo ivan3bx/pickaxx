@@ -1,83 +1,61 @@
-package pickaxx
+package minecraft
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/ivan3bx/pickaxx"
 	"github.com/stretchr/testify/assert"
 )
-
-// safeStringBuilder is a StringBuilder that can be written/read concurrently.
-type safeStringBuilder struct {
-	*strings.Builder
-	lock sync.Mutex
-}
-
-func (w *safeStringBuilder) Write(b []byte) (int, error) {
-	w.lock.Lock()
-	defer w.lock.Unlock()
-	return w.Builder.Write(b)
-}
-
-func (w *safeStringBuilder) WriteString(str string) (int, error) {
-	w.lock.Lock()
-	defer w.lock.Unlock()
-	return w.Builder.WriteString(str)
-}
-
-func (w *safeStringBuilder) String() string {
-	w.lock.Lock()
-	defer w.lock.Unlock()
-	return w.Builder.String()
-}
 
 func TestNewServerManager(t *testing.T) {
 	t.Run("initialized state", func(t *testing.T) {
 		m := &ProcessManager{}
 
 		assert.Equal(t, Unknown, m.CurrentState())
-		assert.False(t, m.Active())
-		assert.Empty(t, m.RecentActivity())
-
+		assert.False(t, m.Running())
 		assert.Error(t, m.Stop(), "expected error on newly initialized server")
 		assert.Error(t, m.Submit("/list"), "expect error on newly initialized server")
 	})
 
 	t.Run("starting", func(t *testing.T) {
-		var writer *safeStringBuilder
 		var m *ProcessManager
 
 		tests := []struct {
 			name      string
-			checkFunc func(t *testing.T)
+			checkFunc func(t *testing.T, activity <-chan pickaxx.Data)
 		}{
 			{
 				name: "is running",
-				checkFunc: func(t *testing.T) {
+				checkFunc: func(t *testing.T, activity <-chan pickaxx.Data) {
 					assertAsync(t, func() bool { return m.CurrentState() == Running })
 				},
 			},
 			{
 				name: "has I/O configured",
-				checkFunc: func(t *testing.T) {
-					assertAsync(t, func() bool { return m.cmdIn != nil && m.cmdOut != nil })
+				checkFunc: func(t *testing.T, activity <-chan pickaxx.Data) {
+					assertAsync(t, func() bool { return m.cmdIn != nil })
 				},
 			},
 			{
 				name: "sends status to clients",
-				checkFunc: func(t *testing.T) {
-					assertAsync(t, func() bool { return strings.Contains(writer.String(), `{"status":"Running"}`) })
+				checkFunc: func(t *testing.T, activity <-chan pickaxx.Data) {
+					assertAsync(t, func() bool {
+						output, _ := json.Marshal(<-activity)
+						return strings.Contains(string(output), `{"status":"Running"}`)
+					})
 				},
 			},
 			{
 				name: "sends commands to executable",
-				checkFunc: func(t *testing.T) {
+				checkFunc: func(t *testing.T, activity <-chan pickaxx.Data) {
 					m.Submit("unique-input-string-123")
 					assertAsync(t, func() bool {
-						return strings.Contains(writer.String(), `unique-input-string-123`)
+						output, _ := json.Marshal(<-activity)
+						return strings.Contains(string(output), `unique-input-string-123`)
 					})
 				},
 			},
@@ -106,17 +84,17 @@ func TestNewServerManager(t *testing.T) {
 					m.unregister(runningCh)
 				}()
 
-				writer = &safeStringBuilder{Builder: &strings.Builder{}}
-
 				// Start the server
-				if !assert.NoError(t, m.Start(writer)) {
+				activity, err := m.Start()
+
+				if !assert.NoError(t, err) {
 					return
 				}
 
 				<-runningCh
 
 				// Run our test
-				tc.checkFunc(t)
+				tc.checkFunc(t, activity)
 			})
 		}
 	})

@@ -1,8 +1,8 @@
-package pickaxx
+package minecraft
 
 import (
-	"io"
 	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/apex/log"
@@ -11,11 +11,13 @@ import (
 func stopServer(m *ProcessManager, cmd *exec.Cmd) {
 	log := log.WithField("action", "ProcessManager.stopServer()")
 
-	io.WriteString(m.cmdOut, "Shutting down..")
-
 	cleanExit := make(chan bool, 1)
 
+	wg := sync.WaitGroup{}
+
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		timer := time.NewTimer(time.Second * 10)
 
 		select {
@@ -41,5 +43,8 @@ func stopServer(m *ProcessManager, cmd *exec.Cmd) {
 	}
 
 	cleanExit <- true
+
+	wg.Wait() // wait for routines to stop
+
 	m.nextState <- Stopped
 }

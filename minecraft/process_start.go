@@ -1,8 +1,7 @@
-package pickaxx
+package minecraft
 
 import (
 	"context"
-	"io"
 	"os/exec"
 
 	"github.com/apex/log"
@@ -17,8 +16,6 @@ func startServer(m *ProcessManager) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, m.Command[0], m.Command[1:]...)
 	cmd.Dir = m.WorkingDir
 
-	io.WriteString(m.cmdOut, "Server is starting")
-
 	defer func() {
 		switch {
 		case cmd.Process == nil:
@@ -29,10 +26,14 @@ func startServer(m *ProcessManager) (*exec.Cmd, error) {
 		}
 	}()
 
-	if err := pipeCommandOutput(cmd, m.cmdOut); err != nil {
+	pipout, err := pipeCommandOutput(cmd)
+
+	if err != nil {
 		log.WithError(err).Error("unable to pipe output")
 		return cmd, err
 	}
+
+	m.cmdOut = pipout
 
 	pipin, err := cmd.StdinPipe()
 
@@ -49,5 +50,6 @@ func startServer(m *ProcessManager) (*exec.Cmd, error) {
 	}
 
 	m.cmd = cmd
+
 	return cmd, nil
 }

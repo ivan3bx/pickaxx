@@ -1,17 +1,19 @@
-package pickaxx
+package minecraft
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
-	"strings"
 	"sync"
 
 	"github.com/apex/log"
+	"github.com/ivan3bx/pickaxx"
 )
+
+var _ pickaxx.ProcessManager = &ProcessManager{}
 
 const (
 	// MaxMem is the maximum allocated memory
@@ -35,14 +37,8 @@ var (
 	DefaultCommand = []string{"java", MaxMem, MinMem, "-jar", JarFile, "nogui"}
 )
 
-// ErrProcessExists exists when a new server process can not be started.
-var ErrProcessExists = errors.New("unable to start new process")
-
 // ErrNoProcess occurs when no process exists to take an action on.
 var ErrNoProcess = errors.New("no process running")
-
-// ErrInvalidClient occurs when a client is not valid.
-var ErrInvalidClient = errors.New("client not valid")
 
 // ProcessManager manages the Minecraft server's process lifecycle.
 type ProcessManager struct {
@@ -54,10 +50,9 @@ type ProcessManager struct {
 	// to 'DefaultWorkignDir'
 	WorkingDir string
 
-	cmd     *exec.Cmd
-	cmdIn   io.Writer
-	cmdOut  io.Writer // output to any/all places
-	fileOut *os.File
+	cmd    *exec.Cmd
+	cmdIn  io.Writer
+	cmdOut io.Reader
 
 	serverPort int
 
@@ -78,22 +73,12 @@ func (m *ProcessManager) unregister(ch <-chan ServerState) {
 	m.notifier.Unregister(ch)
 }
 
-// RecentActivity will return the latest content contained in
-// this server's log file.
-func (m *ProcessManager) RecentActivity() []string {
-	if m.fileOut == nil {
-		return []string{}
-	}
-	content, _ := ioutil.ReadFile(m.fileOut.Name())
-	return strings.Split(string(content), "\n")
-}
-
 // Start will initialize a new process, sending all output to the provided
-// io.Writer, and set values on this object to track process state.
+// channel, and set values on this object to track process state.
 // This will return an error if the process is already running.
-func (m *ProcessManager) Start(w io.Writer) error {
-	if m.Active() {
-		return fmt.Errorf("server already running: %w", ErrProcessExists)
+func (m *ProcessManager) Start() (<-chan pickaxx.Data, error) {
+	if m.Running() {
+		return nil, fmt.Errorf("server already running: %w", pickaxx.ErrProcessExists)
 	}
 
 	// initialize
@@ -109,28 +94,22 @@ func (m *ProcessManager) Start(w io.Writer) error {
 		m.WorkingDir = DefaultWorkingDir
 	}
 
-	m.nextState = make(chan ServerState, 1)
+	activityCh := make(chan pickaxx.Data, 10)
+	stateCh := make(chan ServerState, 1)
 
-	// set up log file
-	logFile, err := ioutil.TempFile(os.TempDir(), fmt.Sprintf("pickaxx_%d", m.serverPort))
-
-	if err != nil {
-		return err
-	}
-
-	m.fileOut = logFile
-
-	// cmdOut collects all output from this process & sends it to both clients & logfile
-	m.cmdOut = io.MultiWriter(w, &newlineWriter{logFile})
+	m.nextState = stateCh
 
 	if _, err := os.Stat(m.WorkingDir); err != nil {
-		return fmt.Errorf("invalid working directory: '%w'", err)
+		return nil, fmt.Errorf("invalid working directory: '%w'", err)
 	}
 
-	go eventLoop(m, w)
+	// start processing state changes
+	go eventLoop(m, activityCh)
 
+	// progress to next state
 	m.nextState <- Starting
-	return nil
+
+	return activityCh, nil
 }
 
 // Stop will halt the current process by sending a direct
@@ -139,7 +118,7 @@ func (m *ProcessManager) Start(w io.Writer) error {
 func (m *ProcessManager) Stop() error {
 	log := log.WithField("action", "ProcessManager.Stop()")
 
-	if !m.Active() {
+	if !m.Running() {
 		log.Info("not running")
 		return ErrNoProcess
 	}
@@ -177,8 +156,8 @@ func (m *ProcessManager) CurrentState() ServerState {
 	return m.state
 }
 
-// Active returns whether the process is running.
-func (m *ProcessManager) Active() bool {
+// Running returns whether the process is running.
+func (m *ProcessManager) Running() bool {
 	return m.currentStateIn(Starting, Running)
 }
 
@@ -190,12 +169,14 @@ func (m *ProcessManager) CanAcceptCommands() bool {
 
 // eventLoop processes state transitions for a process manager and
 // writes a log of activity to the given writer.
-func eventLoop(m *ProcessManager, w io.Writer) {
+func eventLoop(m *ProcessManager, out chan<- pickaxx.Data) {
 	var (
 		log      = log.WithField("action", "eventLoop")
 		cmd      *exec.Cmd
 		newState ServerState
 	)
+
+	wg := sync.WaitGroup{}
 
 	for {
 		newState = <-m.nextState
@@ -207,21 +188,48 @@ func eventLoop(m *ProcessManager, w io.Writer) {
 
 		switch newState {
 		case Starting:
+			out <- consoleOutput{"Server is starting"}
 			cmd, _ = startServer(m)
 		case Running:
 			stop := m.registerObserver(Stopping, Stopped)
-			go m.startLivenessProbe(stop)
+
+			// capture any output
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s := bufio.NewScanner(m.cmdOut)
+				for s.Scan() {
+					out <- consoleOutput{s.Text()}
+				}
+			}()
+
+			// start liveness probe
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := m.runProbe(stop); err != nil {
+					out <- consoleOutput{"Java process not responding. Initiating shutdown."}
+					log.WithField("action", "livenessProbe()").Warn("probe failed")
+					m.Stop()
+				}
+			}()
+
 		case Stopping:
+			out <- consoleOutput{"Shutting down.."}
 			stopServer(m, cmd)
 		case Stopped:
-			io.WriteString(m.cmdOut, "Shutdown complete. Thanks for playing.")
+			out <- consoleOutput{"Shutdown complete. Thanks for playing."}
 		}
 
 		m.notifier.Notify(newState)
 
-		newState.writeJSON(w)
+		out <- stateChangeOutput{newState}
 
 		if newState == Stopped {
+			log.Debug("waiting for child processes to quit")
+			wg.Wait() // wait for any child routines to quit
+			log.Debug("event loop closing")
+			close(out)
 			return
 		}
 	}
@@ -240,17 +248,7 @@ func (m *ProcessManager) currentStateIn(states ...ServerState) bool {
 	return false
 }
 
-func (m *ProcessManager) startLivenessProbe(onStop <-chan ServerState) {
-	check := portChecker{
-		stop: onStop,
-		cancel: func() {
-			if m.Active() {
-				io.WriteString(m.cmdOut, "Java process not responding. Initiating shutdown.")
-				log.WithField("action", "livenessProbe()").Warn("probe failed")
-				m.Stop()
-
-			}
-		},
-	}
-	go check.Run("localhost", fmt.Sprintf("%d", m.serverPort))
+func (m *ProcessManager) runProbe(onStop <-chan ServerState) error {
+	check := portChecker{stop: onStop}
+	return check.Run("localhost", fmt.Sprintf("%d", m.serverPort))
 }

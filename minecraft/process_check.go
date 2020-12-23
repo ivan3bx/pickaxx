@@ -1,10 +1,14 @@
-package pickaxx
+package minecraft
 
 import (
+	"errors"
 	"net"
 	"sync"
 	"time"
 )
+
+// ErrNoResponse is returned when a port check fails.
+var ErrNoResponse = errors.New("port check failed")
 
 // StatusNotifier handles a registery for observers of server state. This
 // implementation can be accessed concurrently by multiple goroutines.
@@ -73,21 +77,20 @@ func (n *StatusNotifier) Notify(st ServerState) {
 }
 
 type portChecker struct {
-	cancel func()             // function to call on failure
-	stop   <-chan ServerState // channel signals if should stop checking
+	stop <-chan ServerState // channel signals if should stop checking
 }
 
-func (p *portChecker) Run(host, port string) {
+func (p *portChecker) Run(host, port string) error {
 	time.Sleep(time.Second * 15) // initial delay
 	ticker := time.NewTicker(time.Second * 2)
 
 	for {
 		select {
 		case <-p.stop:
-			return
+			return nil
 		case <-ticker.C:
 			if !portOpen(host, port) {
-				p.cancel()
+				return errors.New("")
 			}
 		}
 	}
