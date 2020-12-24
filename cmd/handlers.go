@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -16,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/ivan3bx/pickaxx"
+	"github.com/ivan3bx/pickaxx/minecraft"
 )
 
 var upgrader = websocket.Upgrader{
@@ -24,18 +26,68 @@ var upgrader = websocket.Upgrader{
 }
 
 type processHandler struct {
-	manager *pickaxx.ProcessManager
+	logFile *os.File
+	manager pickaxx.ProcessManager
 	writer  io.Writer
+}
+
+// newlineWriter is a writer that inserts '\n' newlines after each call.
+type newlineWriter struct {
+	wrapped io.Writer
+}
+
+func (w *newlineWriter) Write(p []byte) (n int, err error) {
+	if n, err := w.wrapped.Write(p); err != nil {
+		return n, err
+	}
+	return w.wrapped.Write([]byte("\n"))
+}
+
+// monitor output coming from a process by sending it where it needs to go.
+func (h *processHandler) monitor(ch <-chan pickaxx.Data) error {
+	var (
+		err error
+	)
+
+	if h.logFile != nil {
+		log.Warn("processHandler already monitoring activity?")
+	}
+
+	// set up log file
+	if h.logFile, err = ioutil.TempFile(os.TempDir(), fmt.Sprintf("pickaxx_%d", minecraft.DefaultPort)); err != nil {
+		return err
+	}
+
+	// create a new routine to funnel output where it needs to go
+	go func() {
+		enc := json.NewEncoder(h.writer)
+		w := &newlineWriter{h.logFile}
+
+		for newData := range ch {
+			if val, ok := newData.(pickaxx.ConsoleData); ok {
+				io.WriteString(w, val.String())
+			}
+			enc.Encode(newData)
+		}
+	}()
+
+	return nil
 }
 
 func (h *processHandler) rootHandler(c *gin.Context) {
 	var (
 		manager = h.manager
 		lines   []string
+		status  string
 	)
 
-	if manager.Active() {
-		lines = manager.RecentActivity()
+	if manager.Running() {
+		// set a status
+		status = "Running"
+
+		// set recent activity
+		content, _ := ioutil.ReadFile(h.logFile.Name())
+		lines = strings.Split(string(content), "\n")
 	}
 
 	html, err := tmpls.FindString("index.html")
@@ -50,7 +102,7 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 
 	err = t.ExecuteTemplate(c.Writer, "", gin.H{
 		"logLines": lines,
-		"status":   manager.CurrentState().String(),
+		"status":   status,
 	})
 
 	if err != nil {
@@ -62,10 +114,11 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 func (h *processHandler) startServerHandler(c *gin.Context) {
 	var (
 		manager = h.manager
-		w       = h.writer
 	)
 
-	if err := manager.Start(w); err != nil {
+	activity, err := manager.Start()
+
+	if err != nil {
 		var status int
 		var message string
 
@@ -78,7 +131,10 @@ func (h *processHandler) startServerHandler(c *gin.Context) {
 		}
 
 		c.AbortWithStatusJSON(status, gin.H{"err": message})
+		return
 	}
+
+	h.monitor(activity)
 }
 
 func (h *processHandler) createServerHandler(c *gin.Context) {
@@ -141,7 +197,7 @@ func (h *processHandler) sendHandler(c *gin.Context) {
 
 	cmd := data["command"]
 
-	if !manager.Active() {
+	if !manager.Running() {
 		h.writer.Write([]byte("Server not running. Unable to respond to commands."))
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "Server not running."})
 		return

@@ -1,10 +1,18 @@
-package pickaxx
+package minecraft
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/apex/log"
 )
+
+// ErrNoResponse is returned when a response is not provided within a certain period of time.
+var ErrNoResponse = errors.New("no response or check failed")
 
 // StatusNotifier handles a registery for observers of server state. This
 // implementation can be accessed concurrently by multiple goroutines.
@@ -16,7 +24,7 @@ type StatusNotifier struct {
 // Register will register a new observer for the given states.
 // Returns a new channel which will receive messages when the server changes
 // to any of the state(s) provided.
-func (n *StatusNotifier) Register(states []ServerState) <-chan ServerState {
+func (n *StatusNotifier) Register(states ...ServerState) <-chan ServerState {
 	n.Lock()
 	defer n.Unlock()
 
@@ -72,30 +80,34 @@ func (n *StatusNotifier) Notify(st ServerState) {
 	}
 }
 
-type portChecker struct {
-	cancel func()             // function to call on failure
-	stop   <-chan ServerState // channel signals if should stop checking
-}
+// checkPort will continually check for 'liveness' on the given port on localhost.
+// This loop will return in one of two cases:
+//
+// 1. If host does not respond (i.e. port is not open), returns an error.
+// 2. If the provided channel receives a message, will quit (no error).
+func checkPort(ctx context.Context, port int, initialDelay time.Duration, interval time.Duration) error {
+	log := log.WithField("action", "checkPort()")
 
-func (p *portChecker) Run(host, port string) {
-	time.Sleep(time.Second * 15) // initial delay
-	ticker := time.NewTicker(time.Second * 2)
+	time.Sleep(initialDelay) // initial delay
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-p.stop:
-			return
+		case <-ctx.Done():
+			return nil
 		case <-ticker.C:
-			if !portOpen(host, port) {
-				p.cancel()
+			if !portOpen("localhost", port) {
+				log.Warn("probe failed")
+				return ErrNoResponse
 			}
 		}
 	}
-
 }
 
-func portOpen(host string, port string) bool {
-	hostname := net.JoinHostPort(host, port)
+func portOpen(host string, portNum int) bool {
+	hostname := net.JoinHostPort(host, fmt.Sprintf("%d", portNum))
 	conn, err := net.DialTimeout("tcp", hostname, time.Second)
 
 	if err != nil || conn == nil {

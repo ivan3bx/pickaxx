@@ -1,9 +1,4 @@
-package pickaxx
-
-import (
-	"fmt"
-	"io"
-)
+package minecraft
 
 //go:generate stringer -type=ServerState -trimprefix=Server         -output=enums_string.go
 
@@ -19,8 +14,8 @@ const (
 	Stopped
 )
 
-func (state ServerState) writeJSON(w io.Writer) error {
-	jsonString := fmt.Sprintf(`{"status":"%s"}`, state.String())
-	_, err := w.Write([]byte(jsonString))
-	return err
-}
+// func (state ServerState) writeJSON(w io.Writer) error {
+// 	jsonString := fmt.Sprintf(`{"status":"%s"}`, state.String())
+// 	_, err := w.Write([]byte(jsonString))
+// 	return err
+// }

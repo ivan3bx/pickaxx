@@ -8,12 +8,13 @@ import (
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
 	"github.com/ivan3bx/pickaxx"
+	"github.com/ivan3bx/pickaxx/minecraft"
 )
 
 func main() {
 	var (
-		clientMgr  *pickaxx.ClientManager  = &pickaxx.ClientManager{}
-		processMgr *pickaxx.ProcessManager = &pickaxx.ProcessManager{}
+		clientMgr  *pickaxx.ClientManager = &pickaxx.ClientManager{}
+		processMgr pickaxx.ProcessManager = minecraft.New(minecraft.DefaultPort)
 	)
 
 	configureLogging(log.DebugLevel)
@@ -62,7 +63,7 @@ func configureLogging(level log.Level) {
 	log.SetHandler(cli.Default)
 }
 
-func stopProcesses(m *pickaxx.ProcessManager) {
+func stopProcesses(m pickaxx.ProcessManager) {
 	m.Stop()
 }
 

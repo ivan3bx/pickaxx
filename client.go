@@ -10,6 +10,11 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	pingFrequency = time.Second * 10
+	pingTimeout   = time.Second * 5
+)
+
 type websocketClient struct {
 	*websocket.Conn
 }
@@ -66,7 +71,7 @@ func (c *ClientManager) AddClient(conn *websocket.Conn) {
 
 	// pinger
 	go func() {
-		ticker := time.NewTicker(frequency)
+		ticker := time.NewTicker(pingFrequency)
 		defer ticker.Stop()
 
 		for {
@@ -114,4 +119,20 @@ func outputLoop(c *ClientManager, done chan bool) {
 			return
 		}
 	}
+}
+
+func ping(conn *websocket.Conn) error {
+	var (
+		deadline = time.Now().Add(pingTimeout)
+		msg      = websocket.PingMessage
+		data     = []byte("nerb")
+		err      error
+	)
+
+	if err = conn.WriteControl(msg, data, deadline); err != nil {
+		log.WithField("host", conn.RemoteAddr()).Warn("client failed ping")
+		conn.Close()
+	}
+
+	return err
 }
