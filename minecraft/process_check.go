@@ -2,13 +2,16 @@ package minecraft
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/apex/log"
 )
 
-// ErrNoResponse is returned when a port check fails.
-var ErrNoResponse = errors.New("port check failed")
+// ErrNoResponse is returned when a response is not provided within a certain period of time.
+var ErrNoResponse = errors.New("no response or check failed")
 
 // StatusNotifier handles a registery for observers of server state. This
 // implementation can be accessed concurrently by multiple goroutines.
@@ -20,7 +23,7 @@ type StatusNotifier struct {
 // Register will register a new observer for the given states.
 // Returns a new channel which will receive messages when the server changes
 // to any of the state(s) provided.
-func (n *StatusNotifier) Register(states []ServerState) <-chan ServerState {
+func (n *StatusNotifier) Register(states ...ServerState) <-chan ServerState {
 	n.Lock()
 	defer n.Unlock()
 
@@ -76,25 +79,29 @@ func (n *StatusNotifier) Notify(st ServerState) {
 	}
 }
 
-type portChecker struct {
-	stop <-chan ServerState // channel signals if should stop checking
-}
+// checkPort will continually check for 'liveness' on the given port on localhost.
+// This loop will return in one of two cases:
+//
+// 1. If host does not respond (i.e. port is not open), returns an error.
+// 2. If the provided channel receives a message, will quit (no error).
+func checkPort(port int, cancel <-chan ServerState) error {
 
-func (p *portChecker) Run(host, port string) error {
 	time.Sleep(time.Second * 15) // initial delay
+
 	ticker := time.NewTicker(time.Second * 2)
+	defer ticker.Stop()
 
 	for {
 		select {
-		case <-p.stop:
+		case <-cancel:
 			return nil
 		case <-ticker.C:
-			if !portOpen(host, port) {
-				return errors.New("")
+			if !portOpen("localhost", fmt.Sprintf("%d", port)) {
+				log.WithField("action", "livenessProbe()").Warn("probe failed")
+				return ErrNoResponse
 			}
 		}
 	}
-
 }
 
 func portOpen(host string, port string) bool {

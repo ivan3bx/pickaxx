@@ -1,7 +1,7 @@
 package minecraft
 
 import (
-	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +12,6 @@ import (
 	"github.com/apex/log"
 	"github.com/ivan3bx/pickaxx"
 )
-
-var _ pickaxx.ProcessManager = &ProcessManager{}
 
 const (
 	// MaxMem is the maximum allocated memory
@@ -32,29 +30,29 @@ const (
 	DefaultWorkingDir = "testserver"
 )
 
-var (
-	// DefaultCommand is the name of the executable.
-	DefaultCommand = []string{"java", MaxMem, MinMem, "-jar", JarFile, "nogui"}
-)
+// DefaultCommand is the name of the executable.
+var DefaultCommand = []string{"java", MaxMem, MinMem, "-jar", JarFile, "nogui"}
 
-// ErrNoProcess occurs when no process exists to take an action on.
+// ErrNoProcess signifies no process exists to take an action on.
 var ErrNoProcess = errors.New("no process running")
 
-// ProcessManager manages the Minecraft server's process lifecycle.
-type ProcessManager struct {
-	// Command is the command & arguments passed when 'Start()' is
-	// invoked. If not set, it will default to 'DefaultExecArgs'.
-	Command []string
+// New creates a new process manager for an instance of Minecraft server.
+func New(port int) pickaxx.ProcessManager {
+	return &serverManager{
+		Port: port,
+	}
+}
 
-	// WorkingDir is our starting directory. If not set, will default
-	// to 'DefaultWorkignDir'
-	WorkingDir string
+// serverManager manages the Minecraft server's process lifecycle.
+type serverManager struct {
+	Command    []string // Defaults to 'DefaultExecArgs' if not set.
+	WorkingDir string   // Defaults to 'DefaultWorkignDir' if not set.
+	Port       int      // Server port for Minecraft server instance.
 
+	// Child process
 	cmd    *exec.Cmd
 	cmdIn  io.Writer
 	cmdOut io.Reader
-
-	serverPort int
 
 	// state transition
 	state     ServerState
@@ -65,18 +63,10 @@ type ProcessManager struct {
 	notifier StatusNotifier
 }
 
-func (m *ProcessManager) registerObserver(states ...ServerState) <-chan ServerState {
-	return m.notifier.Register(states)
-}
-
-func (m *ProcessManager) unregister(ch <-chan ServerState) {
-	m.notifier.Unregister(ch)
-}
-
 // Start will initialize a new process, sending all output to the provided
-// channel, and set values on this object to track process state.
-// This will return an error if the process is already running.
-func (m *ProcessManager) Start() (<-chan pickaxx.Data, error) {
+// channel and set values on this object to track process state.
+// This returns an error if the process is already running.
+func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 	if m.Running() {
 		return nil, fmt.Errorf("server already running: %w", pickaxx.ErrProcessExists)
 	}
@@ -86,8 +76,8 @@ func (m *ProcessManager) Start() (<-chan pickaxx.Data, error) {
 		m.Command = DefaultCommand
 	}
 
-	if m.serverPort == 0 {
-		m.serverPort = DefaultPort
+	if m.Port == 0 {
+		m.Port = DefaultPort
 	}
 
 	if m.WorkingDir == "" {
@@ -112,10 +102,9 @@ func (m *ProcessManager) Start() (<-chan pickaxx.Data, error) {
 	return activityCh, nil
 }
 
-// Stop will halt the current process by sending a direct
-// shutdown command. This will also kill the process if it
-// does not respond in a given timeframe.
-func (m *ProcessManager) Stop() error {
+// Stop will halt the current process by sending a shutdown command.
+// This will kill the process if it does not respond in a given timeframe.
+func (m *serverManager) Stop() error {
 	log := log.WithField("action", "ProcessManager.Stop()")
 
 	if !m.Running() {
@@ -127,11 +116,11 @@ func (m *ProcessManager) Stop() error {
 	return nil
 }
 
-// Submit will submit a new command to the underlying minecraft process.
+// Submit will submit a new command to the underlying Minecraft server.
 // Any output is returned asynchonously in the processing loop.
 // Prefixed slash-commands will have slashes trimmed (e.g. "/help" -> "help")
-func (m *ProcessManager) Submit(command string) error {
-	if !m.CanAcceptCommands() {
+func (m *serverManager) Submit(command string) error {
+	if m.state != Running && m.state != Stopping {
 		return ErrNoProcess
 	}
 
@@ -149,95 +138,77 @@ func (m *ProcessManager) Submit(command string) error {
 	return err
 }
 
-// CurrentState is the current running state of the process being managed.
-func (m *ProcessManager) CurrentState() ServerState {
-	m.lock.RLock()
-	defer m.lock.RUnlock()
-	return m.state
-}
-
 // Running returns whether the process is running.
-func (m *ProcessManager) Running() bool {
+func (m *serverManager) Running() bool {
 	return m.currentStateIn(Starting, Running)
 }
 
-// CanAcceptCommands returns true if this instance can direct commands
-// through to the process.
-func (m *ProcessManager) CanAcceptCommands() bool {
-	return m.currentStateIn(Running, Stopping)
-}
-
-// eventLoop processes state transitions for a process manager and
-// writes a log of activity to the given writer.
-func eventLoop(m *ProcessManager, out chan<- pickaxx.Data) {
+// eventLoop processes state transitions.
+func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 	var (
-		log      = log.WithField("action", "eventLoop")
-		cmd      *exec.Cmd
+		log = log.WithField("action", "eventLoop")
+		wg  = sync.WaitGroup{}
+
 		newState ServerState
+		err      error
 	)
 
-	wg := sync.WaitGroup{}
+	defer func() {
+		log.Debug("waiting for child processes to quit")
+		wg.Wait() // wait for any child routines to quit
+
+		log.Debug("closing activity channel")
+		close(out)
+	}()
+
+	ctx := context.Background() // TODO: context with cancel (to replace 'cancel' registry.. as we can cancel() inside the stopped state transition itself)
 
 	for {
-		newState = <-m.nextState
-
-		m.lock.Lock()
-		log.WithField("state", fmt.Sprintf("%v->%v", m.state, newState)).Info("state transition")
-		m.state = newState
-		m.lock.Unlock()
+		newState = m.setState(<-m.nextState) // blocks until next state transition event
 
 		switch newState {
 		case Starting:
 			out <- consoleOutput{"Server is starting"}
-			cmd, _ = startServer(m)
-		case Running:
-			stop := m.registerObserver(Stopping, Stopped)
 
-			// capture any output
+			if _, err = startServer(ctx, m); err != nil {
+				log.WithError(err).Error("failed to start server")
+			}
+		case Running:
+			cancel := m.notifier.Register(Stopping, Stopped)
+
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				s := bufio.NewScanner(m.cmdOut)
-				for s.Scan() {
-					out <- consoleOutput{s.Text()}
-				}
+				pipeOutput(m.cmdOut, out)
 			}()
 
 			// start liveness probe
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := m.runProbe(stop); err != nil {
-					out <- consoleOutput{"Java process not responding. Initiating shutdown."}
-					log.WithField("action", "livenessProbe()").Warn("probe failed")
+				if err := checkPort(m.Port, cancel); err != nil {
+					out <- consoleOutput{"Process not responding. Initiating shutdown."}
 					m.Stop()
 				}
 			}()
-
 		case Stopping:
 			out <- consoleOutput{"Shutting down.."}
-			stopServer(m, cmd)
+			stopServer(ctx, m)
 		case Stopped:
 			out <- consoleOutput{"Shutdown complete. Thanks for playing."}
 		}
 
 		m.notifier.Notify(newState)
-
-		out <- stateChangeOutput{newState}
+		out <- stateChangeEvent{newState}
 
 		if newState == Stopped {
-			log.Debug("waiting for child processes to quit")
-			wg.Wait() // wait for any child routines to quit
-			log.Debug("event loop closing")
-			close(out)
 			return
 		}
 	}
 }
 
-// currentStateIn returns true if the current process is in any
-// of the provided states.
-func (m *ProcessManager) currentStateIn(states ...ServerState) bool {
+// currentStateIn returns true if process is in any of the provided states.
+func (m *serverManager) currentStateIn(states ...ServerState) bool {
 	m.lock.RLock()
 	defer m.lock.RUnlock()
 	for _, s := range states {
@@ -248,7 +219,12 @@ func (m *ProcessManager) currentStateIn(states ...ServerState) bool {
 	return false
 }
 
-func (m *ProcessManager) runProbe(onStop <-chan ServerState) error {
-	check := portChecker{stop: onStop}
-	return check.Run("localhost", fmt.Sprintf("%d", m.serverPort))
+func (m *serverManager) setState(newState ServerState) ServerState {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	log.WithField("state", fmt.Sprintf("%v->%v", m.state, newState)).Info("state transition")
+	m.state = newState
+
+	return newState
 }

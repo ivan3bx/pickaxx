@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os/exec"
@@ -10,7 +11,7 @@ import (
 
 var (
 	_ pickaxx.Data = &consoleOutput{}
-	_ pickaxx.Data = &stateChangeOutput{}
+	_ pickaxx.Data = &stateChangeEvent{}
 )
 
 // consoleOutput represents console output (free-form text data).
@@ -26,19 +27,26 @@ func (d consoleOutput) MarshalJSON() ([]byte, error) {
 	return []byte(jsonString), nil
 }
 
-// stateChangeOutput represents a state transition.
-type stateChangeOutput struct {
+// stateChangeEvent represents a state transition event.
+type stateChangeEvent struct {
 	State ServerState
 }
 
 // MarshalJSON converts this output to valid JSON.
-func (d stateChangeOutput) MarshalJSON() ([]byte, error) {
+func (d stateChangeEvent) MarshalJSON() ([]byte, error) {
 	jsonString := fmt.Sprintf(`{"status":"%s"}`, d.State.String())
 	return []byte(jsonString), nil
 }
 
-// pipeCommandOutput creates a goroutine to start receiving
-// stdout & stderr from cmd and pipe it to the given destination.
+// pipeOutput will send all input from the reader as data through the provided channel.
+func pipeOutput(r io.Reader, out chan<- pickaxx.Data) {
+	s := bufio.NewScanner(r)
+	for s.Scan() {
+		out <- consoleOutput{s.Text()}
+	}
+}
+
+// pipeCommandOutput returns a reader combining stdout & stderr from the given command.
 func pipeCommandOutput(cmd *exec.Cmd) (io.Reader, error) {
 	var (
 		cmdOut, cmdErr io.Reader

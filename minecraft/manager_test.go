@@ -13,16 +13,16 @@ import (
 
 func TestNewServerManager(t *testing.T) {
 	t.Run("initialized state", func(t *testing.T) {
-		m := &ProcessManager{}
+		m := &serverManager{}
 
-		assert.Equal(t, Unknown, m.CurrentState())
+		assert.Equal(t, Unknown, m.state)
 		assert.False(t, m.Running())
 		assert.Error(t, m.Stop(), "expected error on newly initialized server")
 		assert.Error(t, m.Submit("/list"), "expect error on newly initialized server")
 	})
 
 	t.Run("starting", func(t *testing.T) {
-		var m *ProcessManager
+		var m *serverManager
 
 		tests := []struct {
 			name      string
@@ -31,7 +31,7 @@ func TestNewServerManager(t *testing.T) {
 			{
 				name: "is running",
 				checkFunc: func(t *testing.T, activity <-chan pickaxx.Data) {
-					assertAsync(t, func() bool { return m.CurrentState() == Running })
+					assertAsync(t, func() bool { return m.state == Running })
 				},
 			},
 			{
@@ -64,14 +64,14 @@ func TestNewServerManager(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 
 				// new process manager
-				m = &ProcessManager{
+				m = &serverManager{
 					Command:    []string{"cat"}, // simple input/output executable
 					WorkingDir: os.TempDir(),
 				}
 
 				// create channels to observe state transitions
-				stopCh := m.registerObserver(Stopped)
-				runningCh := m.registerObserver(Running)
+				stopCh := m.notifier.Register(Stopped)
+				runningCh := m.notifier.Register(Running)
 
 				defer func() {
 					if m.cmd != nil {
@@ -80,8 +80,8 @@ func TestNewServerManager(t *testing.T) {
 						m.Stop()
 						<-stopCh
 					}
-					m.unregister(stopCh)
-					m.unregister(runningCh)
+					m.notifier.Unregister(stopCh)
+					m.notifier.Unregister(runningCh)
 				}()
 
 				// Start the server

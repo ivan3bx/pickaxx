@@ -7,11 +7,10 @@ import (
 	"github.com/apex/log"
 )
 
-func startServer(m *ProcessManager) (*exec.Cmd, error) {
-	ctx := log.NewContext(context.Background(), log.WithField("action", "ProcessManager.startServer()"))
+func startServer(ctx context.Context, m *serverManager) (*exec.Cmd, error) {
 	ctx, cancel := context.WithCancel(ctx)
 
-	log := log.FromContext(ctx)
+	log := log.WithField("action", "ProcessManager.startServer()")
 
 	cmd := exec.CommandContext(ctx, m.Command[0], m.Command[1:]...)
 	cmd.Dir = m.WorkingDir
@@ -19,8 +18,8 @@ func startServer(m *ProcessManager) (*exec.Cmd, error) {
 	defer func() {
 		switch {
 		case cmd.Process == nil:
-			m.nextState <- Stopping
 			cancel()
+			m.nextState <- Stopping
 		default:
 			m.nextState <- Running
 		}

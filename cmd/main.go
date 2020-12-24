@@ -14,7 +14,7 @@ import (
 func main() {
 	var (
 		clientMgr  *pickaxx.ClientManager = &pickaxx.ClientManager{}
-		processMgr pickaxx.ProcessManager = &minecraft.ProcessManager{}
+		processMgr pickaxx.ProcessManager = minecraft.New(minecraft.DefaultPort)
 	)
 
 	configureLogging(log.DebugLevel)
