@@ -17,9 +17,8 @@ func init() {
 }
 func TestNewServerManager(t *testing.T) {
 	t.Run("initialized state", func(t *testing.T) {
-		m := &serverManager{}
+		m := New(DefaultPort)
 
-		assert.Equal(t, Unknown, m.state)
 		assert.False(t, m.Running())
 		assert.Error(t, m.Stop(), "expected error on newly initialized server")
 		assert.Error(t, m.Submit("/list"), "expect error on newly initialized server")
