@@ -1,6 +1,7 @@
 package minecraft
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -84,7 +85,8 @@ func (n *StatusNotifier) Notify(st ServerState) {
 //
 // 1. If host does not respond (i.e. port is not open), returns an error.
 // 2. If the provided channel receives a message, will quit (no error).
-func checkPort(port int, cancel <-chan ServerState) error {
+func checkPort(ctx context.Context, port int) error {
+	log := log.WithField("action", "checkPort()")
 
 	time.Sleep(time.Second * 15) // initial delay
 
@@ -93,19 +95,19 @@ func checkPort(port int, cancel <-chan ServerState) error {
 
 	for {
 		select {
-		case <-cancel:
+		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			if !portOpen("localhost", fmt.Sprintf("%d", port)) {
-				log.WithField("action", "livenessProbe()").Warn("probe failed")
+			if !portOpen("localhost", port) {
+				log.Warn("probe failed")
 				return ErrNoResponse
 			}
 		}
 	}
 }
 
-func portOpen(host string, port string) bool {
-	hostname := net.JoinHostPort(host, port)
+func portOpen(host string, portNum int) bool {
+	hostname := net.JoinHostPort(host, fmt.Sprintf("%d", portNum))
 	conn, err := net.DialTimeout("tcp", hostname, time.Second)
 
 	if err != nil || conn == nil {

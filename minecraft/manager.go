@@ -84,22 +84,20 @@ func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 		m.WorkingDir = DefaultWorkingDir
 	}
 
-	activityCh := make(chan pickaxx.Data, 10)
-	stateCh := make(chan ServerState, 1)
-
-	m.nextState = stateCh
-
 	if _, err := os.Stat(m.WorkingDir); err != nil {
 		return nil, fmt.Errorf("invalid working directory: '%w'", err)
 	}
 
+	m.nextState = make(chan ServerState, 1)
+	activity := make(chan pickaxx.Data, 10)
+
 	// start processing state changes
-	go eventLoop(m, activityCh)
+	go eventLoop(m, activity)
 
 	// progress to next state
 	m.nextState <- Starting
 
-	return activityCh, nil
+	return activity, nil
 }
 
 // Stop will halt the current process by sending a shutdown command.
@@ -153,15 +151,16 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 		err      error
 	)
 
+	ctx, cancelProbe := context.WithCancel(context.Background())
+
 	defer func() {
+		cancelProbe()
 		log.Debug("waiting for child processes to quit")
 		wg.Wait() // wait for any child routines to quit
 
 		log.Debug("closing activity channel")
 		close(out)
 	}()
-
-	ctx := context.Background() // TODO: context with cancel (to replace 'cancel' registry.. as we can cancel() inside the stopped state transition itself)
 
 	for {
 		newState = m.setState(<-m.nextState) // blocks until next state transition event
@@ -174,8 +173,6 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 				log.WithError(err).Error("failed to start server")
 			}
 		case Running:
-			cancel := m.notifier.Register(Stopping, Stopped)
-
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -186,13 +183,14 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := checkPort(m.Port, cancel); err != nil {
+				if err := checkPort(ctx, m.Port); err != nil {
 					out <- consoleOutput{"Process not responding. Initiating shutdown."}
 					m.Stop()
 				}
 			}()
 		case Stopping:
 			out <- consoleOutput{"Shutting down.."}
+			cancelProbe()
 			stopServer(ctx, m)
 		case Stopped:
 			out <- consoleOutput{"Shutdown complete. Thanks for playing."}

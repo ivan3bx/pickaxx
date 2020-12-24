@@ -70,18 +70,14 @@ func TestNewServerManager(t *testing.T) {
 				}
 
 				// create channels to observe state transitions
-				stopCh := m.notifier.Register(Stopped)
-				runningCh := m.notifier.Register(Running)
+				isRunning := m.notifier.Register(Running)
 
 				defer func() {
 					if m.cmd != nil {
-						// test process won't shut-down gracefully, so do it the hard way
-						m.cmd.Process.Kill()
+						m.cmd.Process.Kill() // test process must be killed
 						m.Stop()
-						<-stopCh
 					}
-					m.notifier.Unregister(stopCh)
-					m.notifier.Unregister(runningCh)
+					m.notifier.Unregister(isRunning)
 				}()
 
 				// Start the server
@@ -91,7 +87,7 @@ func TestNewServerManager(t *testing.T) {
 					return
 				}
 
-				<-runningCh
+				<-isRunning
 
 				// Run our test
 				tc.checkFunc(t, activity)
