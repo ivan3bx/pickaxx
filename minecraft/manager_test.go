@@ -7,10 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apex/log"
 	"github.com/ivan3bx/pickaxx"
 	"github.com/stretchr/testify/assert"
 )
 
+func init() {
+	log.SetLevel(log.ErrorLevel)
+}
 func TestNewServerManager(t *testing.T) {
 	t.Run("initialized state", func(t *testing.T) {
 		m := &serverManager{}

@@ -85,12 +85,12 @@ func (n *StatusNotifier) Notify(st ServerState) {
 //
 // 1. If host does not respond (i.e. port is not open), returns an error.
 // 2. If the provided channel receives a message, will quit (no error).
-func checkPort(ctx context.Context, port int) error {
+func checkPort(ctx context.Context, port int, initialDelay time.Duration, interval time.Duration) error {
 	log := log.WithField("action", "checkPort()")
 
-	time.Sleep(time.Second * 15) // initial delay
+	time.Sleep(initialDelay) // initial delay
 
-	ticker := time.NewTicker(time.Second * 2)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

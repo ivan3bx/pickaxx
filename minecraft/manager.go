@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/apex/log"
 	"github.com/ivan3bx/pickaxx"
@@ -183,7 +184,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := checkPort(ctx, m.Port); err != nil {
+				if err := checkPort(ctx, m.Port, time.Second*15, time.Second*2); err != nil {
 					out <- consoleOutput{"Process not responding. Initiating shutdown."}
 					m.Stop()
 				}
