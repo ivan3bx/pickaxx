@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	assets = packr.New("assets", "../public")
-	tmpls  = packr.New("templates", "../templates")
+	assets = packr.New("assets", "../client/dist")
+	tmpls  = packr.New("templates", "../client")
 )
 
 func newRouter() *gin.Engine {

@@ -1,13 +1,13 @@
 VERSION     ?= $(shell git log -n 1 --format=%h)
 GIT_HASH    := $(shell echo $(VERSION) | cut -c 1-7)
 
-serve:
+serve: clean
 	@mkdir -p ./dist
-	@packr2 clean
 	@gowatch
 
 clean:
 	@packr2 clean
+	@rm -rf ./client/dist/*
 	@rm -rf ./dist/*
 
 test:

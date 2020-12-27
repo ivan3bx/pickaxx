@@ -1,4 +1,4 @@
-const { ReconnectingWebSocket } = window;
+import ReconnectingWebSocket from './reconnecting-websocket.min.js';
 
 const websocketURL = `ws://${document.location.host}/ws`;
 

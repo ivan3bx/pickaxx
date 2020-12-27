@@ -1,6 +1,9 @@
 import * as messageBox from './messages.js';
 import * as fileDrop from './filedrop.js';
 
+import 'bootstrap/dist/css/bootstrap.min.css';
+import "../assets/style.scss";
+
 let inputForm = null;
 let inputBox = null;
 let startButton = null;

@@ -1,13 +1,17 @@
 # main executable package
 build_pkg: ./cmd
 
+# pre-build steps
+prev_build_cmds:
+    - npm run dev --prefix=./client
+
 # path to build
 output: dist/pickaxx_dev
 
 # exclude changes in these paths from triggering build
 excluded_paths:
     - testserver
-    - node_modules
+    - client/node_modules
     - dist
     - public
     - templates

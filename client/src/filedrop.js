@@ -1,5 +1,5 @@
 // jQuery dependency for modals..
-const { $ } = window;
+import $ from 'jquery';
 
 const dropZone = document.querySelector('.drop-zone');
 const progressBar = document.querySelector('div[role=progressbar]');

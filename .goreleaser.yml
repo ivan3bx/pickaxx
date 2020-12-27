@@ -1,7 +1,8 @@
 before:
   hooks:
     - go mod download
-    - "{{ .Env.GOPATH }}/bin/packr2 build"
+    - "{{ .Env.GOPATH }}/bin/packr2"
+    - npm run prod --prefix=./client
 builds:
   - id: "main"
     dir: ./cmd
