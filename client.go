@@ -59,6 +59,9 @@ func (c *ClientManager) initialize() {
 
 // Close will close any client connections and clean up resources used by this manager.
 func (c *ClientManager) Close() error {
+	if c.pool == nil {
+		return nil // not initialized
+	}
 	c.done <- true
 	return nil
 }

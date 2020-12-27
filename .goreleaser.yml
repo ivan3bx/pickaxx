@@ -1,7 +1,7 @@
 before:
   hooks:
     - go mod download
-    - "{{ .Env.GOPATH }}/bin/packr2 build"
+    - "{{ .Env.GOPATH }}/bin/packr2"
 builds:
   - id: "main"
     dir: ./cmd

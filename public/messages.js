@@ -1,5 +1,3 @@
-const { ReconnectingWebSocket } = window;
-
 const websocketURL = `ws://${document.location.host}/ws`;
 
 let messages = null;
@@ -67,15 +65,26 @@ function init(startButton, stopButton) {
   messages = document.querySelector('.messages');
   messageList = document.querySelector('.message-list');
 
-  conn = new ReconnectingWebSocket(websocketURL, null, {
-    debug: false,
-    reconnectInterval: 400,
-  });
-
-  conn.onmessage = handleMessage;
-  conn.onclose = handleClose;
+  // lazy-load ReconnectingWebSocket.js
+  var script = document.createElement('script');
+  script.onload = onScriptLoad(websocketURL);
+  script.src = "assets/reconnecting-websocket.min.js";
+  document.head.appendChild(script);
 
   resetScroll();
+}
+
+// returns a function that creates a WSS connection
+function onScriptLoad(websocketURL) {
+  return function () {
+    conn = new ReconnectingWebSocket(websocketURL, null, {
+      debug: false,
+      reconnectInterval: 400,
+    });
+
+    conn.onmessage = handleMessage;
+    conn.onclose = handleClose;
+  };
 }
 
 export { init, clear };
