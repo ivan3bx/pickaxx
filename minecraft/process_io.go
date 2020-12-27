@@ -6,6 +6,7 @@ import (
 	"io"
 	"os/exec"
 
+	"github.com/apex/log"
 	"github.com/ivan3bx/pickaxx"
 )
 
@@ -43,6 +44,11 @@ func pipeOutput(r io.Reader, out chan<- pickaxx.Data) {
 	s := bufio.NewScanner(r)
 	for s.Scan() {
 		out <- consoleOutput{s.Text()}
+	}
+
+	if err := s.Err(); err != nil {
+		log.WithError(err).Error("pipeOutput() closed with error")
+		return
 	}
 }
 

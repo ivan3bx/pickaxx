@@ -152,10 +152,11 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 		err      error
 	)
 
-	ctx, cancelProbe := context.WithCancel(context.Background())
+	mainCtx := context.Background()
+	portCheckCtx, stopPortCheck := context.WithCancel(mainCtx)
 
 	defer func() {
-		cancelProbe()
+		stopPortCheck()
 		log.Debug("waiting for child processes to quit")
 		wg.Wait() // wait for any child routines to quit
 
@@ -170,7 +171,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 		case Starting:
 			out <- consoleOutput{"Server is starting"}
 
-			if _, err = startServer(ctx, m); err != nil {
+			if _, err = startServer(mainCtx, m); err != nil {
 				log.WithError(err).Error("failed to start server")
 			}
 		case Running:
@@ -184,15 +185,15 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := checkPort(ctx, m.Port, time.Second*15, time.Second*2); err != nil {
+				if err := checkPort(portCheckCtx, m.Port, time.Second*15, time.Second*2); err != nil {
 					out <- consoleOutput{"Process not responding. Initiating shutdown."}
 					m.Stop()
 				}
 			}()
 		case Stopping:
 			out <- consoleOutput{"Shutting down.."}
-			cancelProbe()
-			stopServer(ctx, m)
+			stopPortCheck()
+			stopServer(mainCtx, m)
 		case Stopped:
 			out <- consoleOutput{"Shutdown complete. Thanks for playing."}
 		}
