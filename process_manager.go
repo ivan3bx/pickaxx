@@ -22,7 +22,7 @@ type ProcessManager interface {
 
 	// Start will execute an underlying process. Monitors may be
 	// provided and will receive a stream of activity data.
-	Start(...Monitor) error
+	Start() (<-chan Data, error)
 
 	// Stop will halt the process and release any resources.
 	Stop() error
@@ -34,13 +34,12 @@ type ProcessManager interface {
 	Submit(command string) error
 }
 
-// Monitor tracks activity for a stream of Data.
-type Monitor interface {
-	Accept(<-chan Data) error
+// Reporter reads from a Data channel and reports on it.
+type Reporter interface {
+	Report(<-chan Data)
 }
 
-// ConsoleMonitor tracks activity and returns recent history.
-type ConsoleMonitor interface {
-	Monitor
-	History(length int) []string
+// Writer can write out Data.
+type Writer interface {
+	Write(Data)
 }

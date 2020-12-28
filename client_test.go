@@ -1,6 +1,7 @@
 package pickaxx
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/apex/log"
@@ -53,7 +54,7 @@ func TestClientManager(t *testing.T) {
 				defer m.Close()
 
 				m.AddClient(<-server.ConnectedSockets)
-				m.Write([]byte("hi there"))
+				m.Write(dummyEvent{"output", "hi there"})
 
 				assert.NoError(t, client.WaitReceive(websocket.TextMessage, `{"output":"hi there"}`))
 			},
@@ -65,7 +66,7 @@ func TestClientManager(t *testing.T) {
 				defer m.Close()
 
 				m.AddClient(<-server.ConnectedSockets)
-				m.Write([]byte(`{"status":"Running"}`))
+				m.Write(dummyEvent{"status", "Running"})
 
 				assert.NoError(t, client.WaitReceive(websocket.TextMessage, `{"status":"Running"}`))
 			},
@@ -84,4 +85,12 @@ func TestClientManager(t *testing.T) {
 			tc.checkFunc(t, &client)
 		})
 	}
+}
+
+type dummyEvent struct {
+	key, value string
+}
+
+func (e dummyEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{e.key: e.value})
 }

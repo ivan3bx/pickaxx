@@ -84,32 +84,19 @@ func TestNewServerManager(t *testing.T) {
 				}()
 
 				// Start the server
-				w := dummyMonitor{isReady: make(chan bool)}
-				err := m.Start(&w)
+				activity, err := m.Start()
 
 				if !assert.NoError(t, err) {
 					return
 				}
 
 				<-isRunning
-				<-w.isReady
 
 				// Run our test
-				tc.checkFunc(t, w.activityCh)
+				tc.checkFunc(t, activity)
 			})
 		}
 	})
-}
-
-type dummyMonitor struct {
-	isReady    chan bool // signals when channel can retrieve data
-	activityCh <-chan pickaxx.Data
-}
-
-func (c *dummyMonitor) Accept(ch <-chan pickaxx.Data) error {
-	c.activityCh = ch // set the activity channel
-	c.isReady <- true // signal that monitor is wired up
-	return nil
 }
 
 func assertAsync(t *testing.T, testFunc func() bool, msgs ...string) {

@@ -1,10 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,22 +27,13 @@ var upgrader = websocket.Upgrader{
 
 type managedServer struct {
 	pickaxx.ProcessManager
-	clientOut  pickaxx.Monitor
-	consoleOut pickaxx.ConsoleMonitor
+	Reporter *loggingReporter
 }
 
 // ProcessHandler exposes handlers for the lifecycle of process managers.
 type ProcessHandler struct {
 	active       map[string]*managedServer
-	clientWriter io.Writer
-}
-
-// NewProcessHandler creates a new process handler ready to handle requests.
-func NewProcessHandler(writer io.Writer) *ProcessHandler {
-	return &ProcessHandler{
-		active:       make(map[string]*managedServer),
-		clientWriter: writer,
-	}
+	clientWriter *pickaxx.ClientManager
 }
 
 // Stop will reset this handler's state, and signal to any ProcessManager's associated
@@ -52,6 +43,7 @@ func (h *ProcessHandler) Stop() {
 		ms.Stop()
 		delete(h.active, key)
 	}
+	h.clientWriter.Close()
 }
 
 func (h *ProcessHandler) rootHandler(c *gin.Context) {
@@ -60,12 +52,9 @@ func (h *ProcessHandler) rootHandler(c *gin.Context) {
 		status string
 	)
 
-	if m, err := h.resolveServer(&c.Params); err == nil {
-		// set a status
-		status = "Running"
-
-		// set recent activity
-		lines = m.consoleOut.History(-1)
+	if m, err := h.resolveServer(c); err == nil && m.Running() {
+		status = "Running"                 // set a status
+		lines = m.Reporter.ConsoleOutput() // set recent activity
 	}
 
 	html, err := tmpls.FindString("index.html")
@@ -90,41 +79,31 @@ func (h *ProcessHandler) rootHandler(c *gin.Context) {
 }
 
 func (h *ProcessHandler) startServer(c *gin.Context) {
-	var (
-		server *managedServer
-		key    string
-		err    error
-	)
 
-	key = resolveKey(&c.Params)
+	manager, err := h.resolveServer(c)
 
-	if m, _ := h.resolveServer(&c.Params); m != nil && m.Running() {
+	if err == nil && manager.Running() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server already running"})
 		return
 	}
 
-	server = &managedServer{
-		ProcessManager: minecraft.New(minecraft.DefaultPort),
-		consoleOut:     &minecraft.LogfileMonitor{},
-		clientOut:      &minecraft.PassThruMonitor{Writer: h.clientWriter},
+	server := minecraft.New(minecraft.DefaultPort)
+	reporter := &loggingReporter{writer: h.clientWriter}
+
+	// start the server
+	activity, err := server.Start()
+
+	if err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
 	}
 
-	h.active[key] = server
+	go reporter.Report(activity)
 
-	if err = server.Start(server.consoleOut, server.clientOut); err != nil {
-		var status int
-		var message string
-
-		if errors.Is(err, pickaxx.ErrProcessExists) {
-			status = http.StatusBadRequest
-			message = "server already running"
-		} else {
-			status = http.StatusInternalServerError
-			message = "failed to start server"
-		}
-
-		c.AbortWithStatusJSON(status, gin.H{"err": message})
-		return
+	key := resolveKey(&c.Params)
+	h.active[key] = &managedServer{
+		ProcessManager: server,
+		Reporter:       reporter,
 	}
 }
 
@@ -166,11 +145,8 @@ func (h *ProcessHandler) createNew(c *gin.Context) {
 }
 
 func (h *ProcessHandler) stopServer(c *gin.Context) {
-	var (
-		manager pickaxx.ProcessManager
-	)
 
-	manager, err := h.resolveServer(&c.Params)
+	manager, err := h.resolveServer(c)
 
 	if err != nil || !manager.Running() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server is not running"})
@@ -180,16 +156,15 @@ func (h *ProcessHandler) stopServer(c *gin.Context) {
 	if err := manager.Stop(); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
 	}
+
 }
 
 func (h *ProcessHandler) sendCommand(c *gin.Context) {
-	var (
-		manager *managedServer
-		err     error
-	)
 
-	if manager, err = h.resolveServer(&c.Params); err != nil {
-		h.clientWriter.Write([]byte("Server not running. Unable to respond to commands."))
+	manager, err := h.resolveServer(c)
+
+	if err != nil {
+		h.clientWriter.Write(rawData{"Server not running. Unable to respond to commands."})
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server is not running"})
 		return
 	}
@@ -205,28 +180,22 @@ func (h *ProcessHandler) sendCommand(c *gin.Context) {
 	log.WithField("cmd", cmd).Info("executing command")
 
 	if err := manager.Submit(cmd); err != nil {
-		h.clientWriter.Write([]byte("Server not running. Unable to respond to commands."))
+		h.clientWriter.Write(rawData{"Server not running. Unable to respond to commands."})
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "error submitting command"})
 	}
 }
 
-type clientHandler struct {
-	manager *pickaxx.ClientManager
-}
-
-func (h *clientHandler) webSocketHandler(c *gin.Context) {
-	var (
-		cm   = h.manager
-		conn *websocket.Conn
-		err  error
-	)
-
-	if conn, err = upgrader.Upgrade(c.Writer, c.Request, nil); err != nil {
-		c.AbortWithError(http.StatusInternalServerError, err)
-		return
+// webSocketHandler returns a handler for upgrading websocket connections, and takes a
+// function that will receive any new, upgraded connections.
+func webSocketHandler(newConnFunc func(*websocket.Conn)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			c.AbortWithError(http.StatusInternalServerError, err)
+			return
+		}
+		newConnFunc(conn)
 	}
-
-	cm.AddClient(conn)
 }
 
 func resolveKey(p *gin.Params) string {
@@ -243,13 +212,26 @@ func resolveKey(p *gin.Params) string {
 	return key
 }
 
-func (h *ProcessHandler) resolveServer(params *gin.Params) (*managedServer, error) {
-	key := resolveKey(params)
+func (h *ProcessHandler) resolveServer(c *gin.Context) (*managedServer, error) {
+	key := resolveKey(&c.Params)
+	log := log.WithField("key", key)
+
 	if h.active == nil {
 		h.active = make(map[string]*managedServer)
 	}
 	if m := h.active[key]; m != nil {
+		log.WithField("running", m.ProcessManager.Running()).Debug("resolved server")
 		return m, nil
 	}
+
+	log.Debug("no server found")
 	return nil, errors.New("server not found")
+}
+
+type rawData struct {
+	Value string
+}
+
+func (d rawData) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]string{"output": d.Value})
 }

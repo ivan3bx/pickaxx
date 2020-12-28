@@ -13,16 +13,16 @@ import (
 )
 
 func main() {
-	var (
-		clientMgr *pickaxx.ClientManager = &pickaxx.ClientManager{}
-	)
 
 	configureLogging(log.DebugLevel)
 
 	e := newRouter()
 
 	// routes: process handling
-	ph := NewProcessHandler(clientMgr)
+	ph := ProcessHandler{
+		active:       make(map[string]*managedServer),
+		clientWriter: &pickaxx.ClientManager{},
+	}
 
 	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/server/_default") })
 
@@ -37,10 +37,7 @@ func main() {
 	}
 
 	// routes: client handling
-	ch := clientHandler{clientMgr}
-	{
-		e.GET("/ws", ch.webSocketHandler)
-	}
+	e.GET("/ws", webSocketHandler(ph.clientWriter.AddClient))
 
 	// Start the web server
 	srv := startWebServer(e)
@@ -53,7 +50,6 @@ func main() {
 	log.Debug("shutdown initiated")
 	{
 		stopWebServer(srv)
-		stopClientManager(clientMgr)
 		ph.Stop()
 	}
 	log.Info("shutdown complete")
@@ -62,8 +58,4 @@ func main() {
 func configureLogging(level log.Level) {
 	log.SetLevel(level)
 	log.SetHandler(cli.Default)
-}
-
-func stopClientManager(cl *pickaxx.ClientManager) {
-	cl.Close()
 }

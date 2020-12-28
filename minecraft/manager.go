@@ -67,9 +67,9 @@ type serverManager struct {
 // Start will initialize a new process, sending all output to the provided
 // channel and set values on this object to track process state.
 // This returns an error if the process is already running.
-func (m *serverManager) Start(monitors ...pickaxx.Monitor) error {
+func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 	if m.Running() {
-		return fmt.Errorf("server already running: %w", pickaxx.ErrProcessExists)
+		return nil, fmt.Errorf("server already running: %w", pickaxx.ErrProcessExists)
 	}
 
 	// initialize
@@ -86,14 +86,11 @@ func (m *serverManager) Start(monitors ...pickaxx.Monitor) error {
 	}
 
 	if _, err := os.Stat(m.WorkingDir); err != nil {
-		return fmt.Errorf("invalid working directory: '%w'", err)
+		return nil, fmt.Errorf("invalid working directory: '%w'", err)
 	}
 
 	m.nextState = make(chan ServerState, 1)
 	activity := make(chan pickaxx.Data, 10)
-
-	// start monitoring activity
-	go startMonitoring(monitors, activity)
 
 	// start processing state changes
 	go eventLoop(m, activity)
@@ -101,31 +98,7 @@ func (m *serverManager) Start(monitors ...pickaxx.Monitor) error {
 	// progress to next state
 	m.nextState <- Starting
 
-	return nil
-}
-
-func startMonitoring(monitors []pickaxx.Monitor, activity <-chan pickaxx.Data) {
-	children := []chan pickaxx.Data{}
-
-	// every monitor gets it's own channel
-	for _, mon := range monitors {
-		ch := make(chan pickaxx.Data)
-		children = append(children, ch)
-
-		go mon.Accept(ch)
-	}
-
-	// process activity...
-	for data := range activity {
-		for _, child := range children {
-			child <- data
-		}
-	}
-
-	// activity closed, so we close dependent channels
-	for _, ch := range children {
-		close(ch)
-	}
+	return activity, nil
 }
 
 // Stop will halt the current process by sending a shutdown command.
