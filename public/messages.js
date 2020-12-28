@@ -68,7 +68,7 @@ function init(startButton, stopButton) {
   // lazy-load ReconnectingWebSocket.js
   var script = document.createElement('script');
   script.onload = onScriptLoad(websocketURL);
-  script.src = "assets/reconnecting-websocket.min.js";
+  script.src = "/assets/reconnecting-websocket.min.js";
   document.head.appendChild(script);
 
   resetScroll();

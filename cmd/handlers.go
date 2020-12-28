@@ -1,13 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"io/ioutil"
 	"net/http"
@@ -25,69 +25,61 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-type processHandler struct {
-	logFile *os.File
-	manager pickaxx.ProcessManager
-	writer  io.Writer
+// ProcessHandler exposes handlers for the lifecycle of process managers.
+type ProcessHandler struct {
+	procs        map[string]pickaxx.ProcessManager
+	trackers     map[string]pickaxx.Logger
+	clientWriter io.Writer
 }
 
-// newlineWriter is a writer that inserts '\n' newlines after each call.
-type newlineWriter struct {
-	wrapped io.Writer
-}
-
-func (w *newlineWriter) Write(p []byte) (n int, err error) {
-	if n, err := w.wrapped.Write(p); err != nil {
-		return n, err
+// NewProcessHandler creates a new process handler ready to handle requests.
+func NewProcessHandler(writer io.Writer) *ProcessHandler {
+	return &ProcessHandler{
+		procs:        make(map[string]pickaxx.ProcessManager),
+		trackers:     make(map[string]pickaxx.Logger),
+		clientWriter: writer,
 	}
-	return w.wrapped.Write([]byte("\n"))
 }
 
-// monitor output coming from a process by sending it where it needs to go.
-func (h *processHandler) monitor(ch <-chan pickaxx.Data) error {
+// Stop will reset this handler's state, and signal to any ProcessManager's associated
+// with this handler to stop processing immediately.
+func (h *ProcessHandler) Stop() {
+	for _, manager := range h.procs {
+		manager.Stop()
+	}
+	h.procs = make(map[string]pickaxx.ProcessManager)
+	h.trackers = make(map[string]pickaxx.Logger)
+}
+
+func resolveKey(p *gin.Params) string {
+	key := p.ByName("key")
+
+	key = strings.ReplaceAll(key, " ", "_")
+	reg := regexp.MustCompile("[^a-zA-Z0-9_]+")
+	key = reg.ReplaceAllString(key, "")
+
+	if key == "" {
+		key = "_default"
+	}
+
+	return key
+}
+
+func (h *ProcessHandler) rootHandler(c *gin.Context) {
 	var (
-		err error
+		key    string
+		lines  []string
+		status string
 	)
 
-	if h.logFile != nil {
-		log.Warn("processHandler already monitoring activity?")
-	}
+	key = resolveKey(&c.Params)
 
-	// set up log file
-	if h.logFile, err = ioutil.TempFile(os.TempDir(), fmt.Sprintf("pickaxx_%d", minecraft.DefaultPort)); err != nil {
-		return err
-	}
-
-	// create a new routine to funnel output where it needs to go
-	go func() {
-		enc := json.NewEncoder(h.writer)
-		w := &newlineWriter{h.logFile}
-
-		for newData := range ch {
-			if val, ok := newData.(pickaxx.ConsoleData); ok {
-				io.WriteString(w, val.String())
-			}
-			enc.Encode(newData)
-		}
-	}()
-
-	return nil
-}
-
-func (h *processHandler) rootHandler(c *gin.Context) {
-	var (
-		manager = h.manager
-		lines   []string
-		status  string
-	)
-
-	if manager.Running() {
+	if srv := h.procs[key]; srv != nil && srv.Running() {
 		// set a status
 		status = "Running"
 
 		// set recent activity
-		content, _ := ioutil.ReadFile(h.logFile.Name())
-		lines = strings.Split(string(content), "\n")
+		lines = h.trackers[key].History(-1)
 	}
 
 	html, err := tmpls.FindString("index.html")
@@ -111,14 +103,28 @@ func (h *processHandler) rootHandler(c *gin.Context) {
 	}
 }
 
-func (h *processHandler) startServerHandler(c *gin.Context) {
+func (h *ProcessHandler) startServer(c *gin.Context) {
 	var (
-		manager = h.manager
+		activity <-chan pickaxx.Data
+		manager  pickaxx.ProcessManager
+		tracker  pickaxx.Logger
+		err      error
 	)
 
-	activity, err := manager.Start()
+	key := resolveKey(&c.Params)
 
-	if err != nil {
+	if m := h.procs[key]; m != nil && m.Running() {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server already running"})
+		return
+	}
+
+	manager = minecraft.New(minecraft.DefaultPort)
+	h.procs[key] = manager
+
+	tracker = minecraft.NewTracker(h.clientWriter)
+	h.trackers[key] = tracker
+
+	if activity, err = manager.Start(); err != nil {
 		var status int
 		var message string
 
@@ -134,10 +140,10 @@ func (h *processHandler) startServerHandler(c *gin.Context) {
 		return
 	}
 
-	h.monitor(activity)
+	go tracker.Track(activity)
 }
 
-func (h *processHandler) createServerHandler(c *gin.Context) {
+func (h *ProcessHandler) createNew(c *gin.Context) {
 	var (
 		tempFile *os.File
 		err      error
@@ -174,20 +180,35 @@ func (h *processHandler) createServerHandler(c *gin.Context) {
 	})
 }
 
-func (h *processHandler) stopServerHandler(c *gin.Context) {
+func (h *ProcessHandler) stopServer(c *gin.Context) {
 	var (
-		manager = h.manager
+		manager pickaxx.ProcessManager
 	)
+
+	key := resolveKey(&c.Params)
+
+	if manager = h.procs[key]; manager == nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server is not running"})
+		return
+	}
 
 	if err := manager.Stop(); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
 	}
 }
 
-func (h *processHandler) sendHandler(c *gin.Context) {
+func (h *ProcessHandler) sendCommand(c *gin.Context) {
 	var (
-		manager = h.manager
+		manager pickaxx.ProcessManager
 	)
+
+	key := resolveKey(&c.Params)
+
+	if manager = h.procs[key]; manager == nil {
+		h.clientWriter.Write([]byte("Server not running. Unable to respond to commands."))
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server is not running"})
+		return
+	}
 
 	var data = map[string]string{}
 	if err := c.BindJSON(&data); err != nil {
@@ -197,15 +218,10 @@ func (h *processHandler) sendHandler(c *gin.Context) {
 
 	cmd := data["command"]
 
-	if !manager.Running() {
-		h.writer.Write([]byte("Server not running. Unable to respond to commands."))
-		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "Server not running."})
-		return
-	}
-
 	log.WithField("cmd", cmd).Info("executing command")
 
 	if err := manager.Submit(cmd); err != nil {
+		h.clientWriter.Write([]byte("Server not running. Unable to respond to commands."))
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"output": "error submitting command"})
 	}
 }

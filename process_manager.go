@@ -3,6 +3,7 @@ package pickaxx
 import (
 	"encoding/json"
 	"errors"
+	"io"
 )
 
 // ErrProcessExists exists when a new server process can not be started.
@@ -31,4 +32,18 @@ type ProcessManager interface {
 
 	// Submit will send a command to the underlying process.
 	Submit(command string) error
+}
+
+// Logger emits activity for a stream of Data.
+type Logger interface {
+	io.Writer
+
+	// Track will begin tracking activity from the given channel. This method
+	// blocks until the provided context is canceled, any unexpected error, or
+	// if the underlying channel is closed.
+	Track(<-chan Data) error
+
+	// History returns recent entries equal to the number of lines,
+	// or -1 if all available data should be returned.
+	History(lines int) []string
 }

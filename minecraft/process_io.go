@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
@@ -24,8 +25,8 @@ func (d consoleOutput) String() string { return d.Text }
 
 // MarshalJSON converts this output to valid JSON.
 func (d consoleOutput) MarshalJSON() ([]byte, error) {
-	jsonString := fmt.Sprintf(`{"output":"%s"}`, d.Text)
-	return []byte(jsonString), nil
+	holder := map[string]string{"output": d.String()}
+	return json.Marshal(&holder)
 }
 
 // stateChangeEvent represents a state transition event.

@@ -1,20 +1,20 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
+	"github.com/gin-gonic/gin"
 	"github.com/ivan3bx/pickaxx"
-	"github.com/ivan3bx/pickaxx/minecraft"
 )
 
 func main() {
 	var (
-		clientMgr  *pickaxx.ClientManager = &pickaxx.ClientManager{}
-		processMgr pickaxx.ProcessManager = minecraft.New(minecraft.DefaultPort)
+		clientMgr *pickaxx.ClientManager = &pickaxx.ClientManager{}
 	)
 
 	configureLogging(log.DebugLevel)
@@ -22,16 +22,17 @@ func main() {
 	e := newRouter()
 
 	// routes: process handling
-	ph := processHandler{
-		manager: processMgr,
-		writer:  clientMgr,
-	}
+	ph := NewProcessHandler(clientMgr)
+
+	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/server/_default") })
+
+	srvRoute := e.Group("/server")
 	{
-		e.GET("/", ph.rootHandler)
-		e.POST("/start", ph.startServerHandler)
-		e.POST("/stop", ph.stopServerHandler)
-		e.POST("/server", ph.createServerHandler)
-		e.POST("/send", ph.sendHandler)
+		srvRoute.GET("/:key", ph.rootHandler)
+		srvRoute.POST("/", ph.createNew)
+		srvRoute.POST("/:key/start", ph.startServer)
+		srvRoute.POST("/:key/stop", ph.stopServer)
+		srvRoute.POST("/:key/send", ph.sendCommand)
 
 	}
 
@@ -52,8 +53,8 @@ func main() {
 	log.Debug("shutdown initiated")
 	{
 		stopWebServer(srv)
-		stopProcesses(processMgr)
 		stopClientManager(clientMgr)
+		ph.Stop()
 	}
 	log.Info("shutdown complete")
 }
@@ -61,10 +62,6 @@ func main() {
 func configureLogging(level log.Level) {
 	log.SetLevel(level)
 	log.SetHandler(cli.Default)
-}
-
-func stopProcesses(m pickaxx.ProcessManager) {
-	m.Stop()
 }
 
 func stopClientManager(cl *pickaxx.ClientManager) {
