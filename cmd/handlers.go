@@ -87,7 +87,7 @@ func (h *ProcessHandler) startServer(c *gin.Context) {
 		return
 	}
 
-	server := minecraft.New(minecraft.DefaultPort)
+	server := minecraft.New(dataDir, minecraft.DefaultPort)
 	reporter := &loggingReporter{writer: h.clientWriter}
 
 	// start the server

@@ -16,6 +16,10 @@ var (
 )
 
 func newRouter() *gin.Engine {
+	if version != "" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	e := gin.New()
 	e.Use(gin.Logger(), gin.Recovery())
 

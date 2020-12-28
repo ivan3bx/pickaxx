@@ -22,9 +22,8 @@ The goals of this project are as follows:
 ```bash
 go get -u github.com/silenceper/gowatch
 ```
-2. Until this tool can bootstrap new Minecraft instances on it's own, manually download `server.jar` from Minecraft's site (see below), and copy this into the path `testserver/server.jar`.
-3. Run tests (or use `make test`).
-4. Run `make` which will start the server. Load http://localhost:8080
+2. Run tests (or use `make test`).
+3. Run `make` which will start the server. Load http://localhost:8080
 
 ## Dependencies
 

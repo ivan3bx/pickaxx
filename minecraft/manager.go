@@ -26,9 +26,6 @@ const (
 
 	// DefaultPort is the default minecraft server port
 	DefaultPort = 25565
-
-	// DefaultWorkingDir is the default working directory
-	DefaultWorkingDir = "testserver"
 )
 
 // DefaultCommand is the name of the executable.
@@ -38,9 +35,10 @@ var DefaultCommand = []string{"java", MaxMem, MinMem, "-jar", JarFile, "nogui"}
 var ErrNoProcess = errors.New("no process running")
 
 // New creates a new process manager for an instance of Minecraft server.
-func New(port int) pickaxx.ProcessManager {
+func New(dataDir string, port int) pickaxx.ProcessManager {
 	return &serverManager{
-		Port: port,
+		WorkingDir: dataDir,
+		Port:       port,
 	}
 }
 
@@ -82,7 +80,7 @@ func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 	}
 
 	if m.WorkingDir == "" {
-		m.WorkingDir = DefaultWorkingDir
+		return nil, fmt.Errorf("no working directory configured")
 	}
 
 	if _, err := os.Stat(m.WorkingDir); err != nil {

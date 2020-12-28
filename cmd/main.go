@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,9 +14,28 @@ import (
 	"github.com/ivan3bx/pickaxx"
 )
 
-func main() {
+const defaultLogLevel = log.InfoLevel
 
-	configureLogging(log.DebugLevel)
+var (
+	dataDir string
+	verbose bool
+	version string // version is only set on release
+)
+
+func init() {
+	flag.StringVar(&dataDir, "d", "./pxdata", "directory to store server data")
+	flag.BoolVar(&verbose, "v", false, "verbose logging")
+}
+
+func main() {
+	flag.Parse()
+
+	configureLogging()
+	configureDataDirectory()
+
+	if version != "" {
+		log.Infof("Pickaxx: %s ⛏", version)
+	}
 
 	e := newRouter()
 
@@ -25,22 +46,18 @@ func main() {
 	}
 
 	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/server/_default") })
-
-	srvRoute := e.Group("/server")
-	{
-		srvRoute.GET("/:key", ph.rootHandler)
-		srvRoute.POST("/", ph.createNew)
-		srvRoute.POST("/:key/start", ph.startServer)
-		srvRoute.POST("/:key/stop", ph.stopServer)
-		srvRoute.POST("/:key/send", ph.sendCommand)
-
-	}
+	e.GET("/server/:key", ph.rootHandler)
+	e.POST("/server", ph.createNew)
+	e.POST("/server/:key/start", ph.startServer)
+	e.POST("/server/:key/stop", ph.stopServer)
+	e.POST("/server/:key/send", ph.sendCommand)
 
 	// routes: client handling
 	e.GET("/ws", webSocketHandler(ph.clientWriter.AddClient))
 
 	// Start the web server
 	srv := startWebServer(e)
+	log.Infof("Server running at: http://%s", srv.Addr)
 
 	// shutdown on interrupt
 	quit := make(chan os.Signal, 1)
@@ -55,7 +72,21 @@ func main() {
 	log.Info("shutdown complete")
 }
 
-func configureLogging(level log.Level) {
+func configureLogging() {
+	level := defaultLogLevel
+
+	if verbose {
+		level = log.DebugLevel
+	}
+
 	log.SetLevel(level)
 	log.SetHandler(cli.Default)
+}
+
+func configureDataDirectory() {
+	fmt.Println("Making dir:", dataDir)
+	err := os.Mkdir(dataDir, 0755)
+	if err != nil && os.IsNotExist(err) {
+		log.WithError(err).Fatalf("unable to create directory: %s", dataDir)
+	}
 }

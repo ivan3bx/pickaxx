@@ -2,6 +2,7 @@ package minecraft
 
 import (
 	"encoding/json"
+	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -12,12 +13,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var dataDir string
+
 func init() {
+	dataDir, _ = ioutil.TempDir(os.TempDir(), "pickaxx_minecraft")
+	log.WithField("path", dataDir).Info("test directory")
+
 	log.SetLevel(log.ErrorLevel)
 }
 func TestNewServerManager(t *testing.T) {
 	t.Run("initialized state", func(t *testing.T) {
-		m := New(DefaultPort)
+		m := New(dataDir, DefaultPort)
 
 		assert.False(t, m.Running())
 		assert.Error(t, m.Stop(), "expected error on newly initialized server")
