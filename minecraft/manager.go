@@ -67,9 +67,9 @@ type serverManager struct {
 // Start will initialize a new process, sending all output to the provided
 // channel and set values on this object to track process state.
 // This returns an error if the process is already running.
-func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
+func (m *serverManager) Start(monitors ...pickaxx.Monitor) error {
 	if m.Running() {
-		return nil, fmt.Errorf("server already running: %w", pickaxx.ErrProcessExists)
+		return fmt.Errorf("server already running: %w", pickaxx.ErrProcessExists)
 	}
 
 	// initialize
@@ -86,11 +86,14 @@ func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 	}
 
 	if _, err := os.Stat(m.WorkingDir); err != nil {
-		return nil, fmt.Errorf("invalid working directory: '%w'", err)
+		return fmt.Errorf("invalid working directory: '%w'", err)
 	}
 
 	m.nextState = make(chan ServerState, 1)
 	activity := make(chan pickaxx.Data, 10)
+
+	// start monitoring activity
+	go startMonitoring(monitors, activity)
 
 	// start processing state changes
 	go eventLoop(m, activity)
@@ -98,7 +101,31 @@ func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 	// progress to next state
 	m.nextState <- Starting
 
-	return activity, nil
+	return nil
+}
+
+func startMonitoring(monitors []pickaxx.Monitor, activity <-chan pickaxx.Data) {
+	children := []chan pickaxx.Data{}
+
+	// every monitor gets it's own channel
+	for _, mon := range monitors {
+		ch := make(chan pickaxx.Data)
+		children = append(children, ch)
+
+		go mon.Accept(ch)
+	}
+
+	// process activity...
+	for data := range activity {
+		for _, child := range children {
+			child <- data
+		}
+	}
+
+	// activity closed, so we close dependent channels
+	for _, ch := range children {
+		close(ch)
+	}
 }
 
 // Stop will halt the current process by sending a shutdown command.
@@ -143,7 +170,7 @@ func (m *serverManager) Running() bool {
 }
 
 // eventLoop processes state transitions.
-func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
+func eventLoop(m *serverManager, activity chan<- pickaxx.Data) {
 	var (
 		log = log.WithField("action", "eventLoop")
 		wg  = sync.WaitGroup{}
@@ -161,7 +188,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 		wg.Wait() // wait for any child routines to quit
 
 		log.Debug("closing activity channel")
-		close(out)
+		close(activity)
 	}()
 
 	for {
@@ -169,7 +196,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 
 		switch newState {
 		case Starting:
-			out <- consoleOutput{"Server is starting"}
+			activity <- consoleEvent{"Server is starting"}
 
 			if _, err = startServer(mainCtx, m); err != nil {
 				log.WithError(err).Error("failed to start server")
@@ -178,7 +205,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				pipeOutput(m.cmdOut, out)
+				pipeOutput(m.cmdOut, activity)
 			}()
 
 			// start liveness probe
@@ -186,20 +213,20 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			go func() {
 				defer wg.Done()
 				if err := checkPort(portCheckCtx, m.Port, time.Second*15, time.Second*2); err != nil {
-					out <- consoleOutput{"Process not responding. Initiating shutdown."}
+					activity <- consoleEvent{"Process not responding. Initiating shutdown."}
 					m.Stop()
 				}
 			}()
 		case Stopping:
-			out <- consoleOutput{"Shutting down.."}
+			activity <- consoleEvent{"Shutting down.."}
 			stopPortCheck()
 			stopServer(mainCtx, m)
 		case Stopped:
-			out <- consoleOutput{"Shutdown complete. Thanks for playing."}
+			activity <- consoleEvent{"Shutdown complete. Thanks for playing."}
 		}
 
 		m.notifier.Notify(newState)
-		out <- stateChangeEvent{newState}
+		activity <- stateChangeEvent{newState}
 
 		if newState == Stopped {
 			return

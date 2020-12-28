@@ -3,7 +3,6 @@ package pickaxx
 import (
 	"encoding/json"
 	"errors"
-	"io"
 )
 
 // ErrProcessExists exists when a new server process can not be started.
@@ -21,8 +20,9 @@ type ConsoleData interface {
 // ProcessManager can manage and interact with a process.
 type ProcessManager interface {
 
-	// Start will connect & initiate the underlying process.
-	Start() (<-chan Data, error)
+	// Start will execute an underlying process. Monitors may be
+	// provided and will receive a stream of activity data.
+	Start(...Monitor) error
 
 	// Stop will halt the process and release any resources.
 	Stop() error
@@ -34,16 +34,13 @@ type ProcessManager interface {
 	Submit(command string) error
 }
 
-// Logger emits activity for a stream of Data.
-type Logger interface {
-	io.Writer
+// Monitor tracks activity for a stream of Data.
+type Monitor interface {
+	Accept(<-chan Data) error
+}
 
-	// Track will begin tracking activity from the given channel. This method
-	// blocks until the provided context is canceled, any unexpected error, or
-	// if the underlying channel is closed.
-	Track(<-chan Data) error
-
-	// History returns recent entries equal to the number of lines,
-	// or -1 if all available data should be returned.
-	History(lines int) []string
+// ConsoleMonitor tracks activity and returns recent history.
+type ConsoleMonitor interface {
+	Monitor
+	History(length int) []string
 }

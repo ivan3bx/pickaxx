@@ -12,19 +12,19 @@ import (
 )
 
 var (
-	_ pickaxx.Data = &consoleOutput{}
+	_ pickaxx.Data = &consoleEvent{}
 	_ pickaxx.Data = &stateChangeEvent{}
 )
 
-// consoleOutput represents console output (free-form text data).
-type consoleOutput struct {
+// consoleEvent represents console output (free-form text data).
+type consoleEvent struct {
 	Text string
 }
 
-func (d consoleOutput) String() string { return d.Text }
+func (d consoleEvent) String() string { return d.Text }
 
 // MarshalJSON converts this output to valid JSON.
-func (d consoleOutput) MarshalJSON() ([]byte, error) {
+func (d consoleEvent) MarshalJSON() ([]byte, error) {
 	holder := map[string]string{"output": d.String()}
 	return json.Marshal(&holder)
 }
@@ -44,7 +44,7 @@ func (d stateChangeEvent) MarshalJSON() ([]byte, error) {
 func pipeOutput(r io.Reader, out chan<- pickaxx.Data) {
 	s := bufio.NewScanner(r)
 	for s.Scan() {
-		out <- consoleOutput{s.Text()}
+		out <- consoleEvent{s.Text()}
 	}
 
 	if err := s.Err(); err != nil {

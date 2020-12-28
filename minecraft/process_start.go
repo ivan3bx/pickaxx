@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+
 	"os"
 	"os/exec"
 	"strings"
@@ -14,16 +15,17 @@ import (
 	"github.com/ivan3bx/pickaxx"
 )
 
-var _ pickaxx.Logger = &logFileTracker{}
+var _ pickaxx.Monitor = &LogfileMonitor{}
 
-type logFileTracker struct {
-	consoleLog   *os.File
-	clientWriter io.Writer
+// LogfileMonitor monitors console output and sends data to a log file.
+type LogfileMonitor struct {
+	logFile *os.File
 }
 
-// NewTracker returns a new instance of a tracker that can
-// write data out to the provided writers.
-func NewTracker(w ...io.Writer) pickaxx.Logger {
+// Accept takes a channel and starts writing ConsoleData entries to a log file.
+func (m *LogfileMonitor) Accept(ch <-chan pickaxx.Data) error {
+	log := log.WithField("action", "LogfileMonitor.Accept()")
+
 	file, err := ioutil.TempFile(os.TempDir(), "pickaxx_log")
 
 	if err != nil {
@@ -31,46 +33,23 @@ func NewTracker(w ...io.Writer) pickaxx.Logger {
 		return nil
 	}
 
-	return &logFileTracker{
-		consoleLog:   file,
-		clientWriter: io.MultiWriter(w...),
-	}
-}
+	m.logFile = file
 
-func (t *logFileTracker) Write(p []byte) (n int, err error) {
-	line := fmt.Sprintf("%s\n", string(p))
-	return io.WriteString(t.consoleLog, line)
-}
-
-// Track will begin tracking activity from the given channel. This method
-// blocks the caller, and will return errors for any unexpected exit, or
-// 'nil' when the underlying channel is closed.
-func (t *logFileTracker) Track(ch <-chan pickaxx.Data) error {
-	log := log.WithField("action", "logFileTracker")
-	enc := json.NewEncoder(t.clientWriter)
-	// w := &newlineWriter{t.consoleLog}
-
-	for dataItem := range ch {
-
-		if err := enc.Encode(dataItem); err != nil {
-			log.WithError(err).Errorf("encoding failure: %v", dataItem)
-			return err
-		}
-		if val, ok := dataItem.(pickaxx.ConsoleData); ok {
-			t.Write([]byte(val.String()))
-			// // console output gets written to our writer
-			// io.WriteString(w, val.String())
+	for data := range ch {
+		if val, ok := data.(pickaxx.ConsoleData); ok {
+			line := fmt.Sprintf("%s\n", val.String())
+			io.WriteString(file, line)
 		}
 	}
 
-	log.Info("stopped")
+	log.Debug("channel closed")
 	return nil
 }
 
-// History returns recent entries equal to the number of lines,
-// or -1 if all available data should be returned.
-func (t *logFileTracker) History(length int) []string {
-	content, _ := ioutil.ReadFile(t.consoleLog.Name())
+// History returns recent entries equal to the number of lines in the param.
+// If length=-1, all available data is returned.
+func (m *LogfileMonitor) History(length int) []string {
+	content, _ := ioutil.ReadFile(m.logFile.Name())
 	lines := strings.Split(string(content), "\n")
 
 	if length == -1 || length > len(lines) {
@@ -78,6 +57,23 @@ func (t *logFileTracker) History(length int) []string {
 	}
 
 	return lines[:length]
+}
+
+// PassThruMonitor monitors activity and serializes it as JSON through a provided writer.
+type PassThruMonitor struct {
+	Writer io.Writer
+}
+
+// Accept takes a channel and starts writing ConsoleData entries to a log file.
+func (m *PassThruMonitor) Accept(ch <-chan pickaxx.Data) error {
+	log := log.WithField("action", "PassThruMonitor.Accept()")
+	enc := json.NewEncoder(m.Writer)
+
+	for data := range ch {
+		enc.Encode(data)
+	}
+	log.Debug("channel closed")
+	return nil
 }
 
 func startServer(ctx context.Context, m *serverManager) (*exec.Cmd, error) {

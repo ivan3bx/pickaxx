@@ -25,18 +25,22 @@ var upgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
+type managedServer struct {
+	pickaxx.ProcessManager
+	clientOut  pickaxx.Monitor
+	consoleOut pickaxx.ConsoleMonitor
+}
+
 // ProcessHandler exposes handlers for the lifecycle of process managers.
 type ProcessHandler struct {
-	procs        map[string]pickaxx.ProcessManager
-	trackers     map[string]pickaxx.Logger
+	active       map[string]*managedServer
 	clientWriter io.Writer
 }
 
 // NewProcessHandler creates a new process handler ready to handle requests.
 func NewProcessHandler(writer io.Writer) *ProcessHandler {
 	return &ProcessHandler{
-		procs:        make(map[string]pickaxx.ProcessManager),
-		trackers:     make(map[string]pickaxx.Logger),
+		active:       make(map[string]*managedServer),
 		clientWriter: writer,
 	}
 }
@@ -44,42 +48,24 @@ func NewProcessHandler(writer io.Writer) *ProcessHandler {
 // Stop will reset this handler's state, and signal to any ProcessManager's associated
 // with this handler to stop processing immediately.
 func (h *ProcessHandler) Stop() {
-	for _, manager := range h.procs {
-		manager.Stop()
+	for key, ms := range h.active {
+		ms.Stop()
+		delete(h.active, key)
 	}
-	h.procs = make(map[string]pickaxx.ProcessManager)
-	h.trackers = make(map[string]pickaxx.Logger)
-}
-
-func resolveKey(p *gin.Params) string {
-	key := p.ByName("key")
-
-	key = strings.ReplaceAll(key, " ", "_")
-	reg := regexp.MustCompile("[^a-zA-Z0-9_]+")
-	key = reg.ReplaceAllString(key, "")
-
-	if key == "" {
-		key = "_default"
-	}
-
-	return key
 }
 
 func (h *ProcessHandler) rootHandler(c *gin.Context) {
 	var (
-		key    string
 		lines  []string
 		status string
 	)
 
-	key = resolveKey(&c.Params)
-
-	if srv := h.procs[key]; srv != nil && srv.Running() {
+	if m, err := h.resolveServer(&c.Params); err == nil {
 		// set a status
 		status = "Running"
 
 		// set recent activity
-		lines = h.trackers[key].History(-1)
+		lines = m.consoleOut.History(-1)
 	}
 
 	html, err := tmpls.FindString("index.html")
@@ -105,26 +91,27 @@ func (h *ProcessHandler) rootHandler(c *gin.Context) {
 
 func (h *ProcessHandler) startServer(c *gin.Context) {
 	var (
-		activity <-chan pickaxx.Data
-		manager  pickaxx.ProcessManager
-		tracker  pickaxx.Logger
-		err      error
+		server *managedServer
+		key    string
+		err    error
 	)
 
-	key := resolveKey(&c.Params)
+	key = resolveKey(&c.Params)
 
-	if m := h.procs[key]; m != nil && m.Running() {
+	if m, _ := h.resolveServer(&c.Params); m != nil && m.Running() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server already running"})
 		return
 	}
 
-	manager = minecraft.New(minecraft.DefaultPort)
-	h.procs[key] = manager
+	server = &managedServer{
+		ProcessManager: minecraft.New(minecraft.DefaultPort),
+		consoleOut:     &minecraft.LogfileMonitor{},
+		clientOut:      &minecraft.PassThruMonitor{Writer: h.clientWriter},
+	}
 
-	tracker = minecraft.NewTracker(h.clientWriter)
-	h.trackers[key] = tracker
+	h.active[key] = server
 
-	if activity, err = manager.Start(); err != nil {
+	if err = server.Start(server.consoleOut, server.clientOut); err != nil {
 		var status int
 		var message string
 
@@ -139,8 +126,6 @@ func (h *ProcessHandler) startServer(c *gin.Context) {
 		c.AbortWithStatusJSON(status, gin.H{"err": message})
 		return
 	}
-
-	go tracker.Track(activity)
 }
 
 func (h *ProcessHandler) createNew(c *gin.Context) {
@@ -185,9 +170,9 @@ func (h *ProcessHandler) stopServer(c *gin.Context) {
 		manager pickaxx.ProcessManager
 	)
 
-	key := resolveKey(&c.Params)
+	manager, err := h.resolveServer(&c.Params)
 
-	if manager = h.procs[key]; manager == nil {
+	if err != nil || !manager.Running() {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server is not running"})
 		return
 	}
@@ -199,24 +184,23 @@ func (h *ProcessHandler) stopServer(c *gin.Context) {
 
 func (h *ProcessHandler) sendCommand(c *gin.Context) {
 	var (
-		manager pickaxx.ProcessManager
+		manager *managedServer
+		err     error
 	)
 
-	key := resolveKey(&c.Params)
-
-	if manager = h.procs[key]; manager == nil {
+	if manager, err = h.resolveServer(&c.Params); err != nil {
 		h.clientWriter.Write([]byte("Server not running. Unable to respond to commands."))
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "server is not running"})
 		return
 	}
 
-	var data = map[string]string{}
-	if err := c.BindJSON(&data); err != nil {
+	var commandData = map[string]string{}
+	if err := c.BindJSON(&commandData); err != nil {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 
-	cmd := data["command"]
+	cmd := commandData["command"]
 
 	log.WithField("cmd", cmd).Info("executing command")
 
@@ -243,4 +227,29 @@ func (h *clientHandler) webSocketHandler(c *gin.Context) {
 	}
 
 	cm.AddClient(conn)
+}
+
+func resolveKey(p *gin.Params) string {
+	key := p.ByName("key")
+
+	key = strings.ReplaceAll(key, " ", "_")
+	reg := regexp.MustCompile("[^a-zA-Z0-9_]+")
+	key = reg.ReplaceAllString(key, "")
+
+	if key == "" {
+		key = "_default"
+	}
+
+	return key
+}
+
+func (h *ProcessHandler) resolveServer(params *gin.Params) (*managedServer, error) {
+	key := resolveKey(params)
+	if h.active == nil {
+		h.active = make(map[string]*managedServer)
+	}
+	if m := h.active[key]; m != nil {
+		return m, nil
+	}
+	return nil, errors.New("server not found")
 }
