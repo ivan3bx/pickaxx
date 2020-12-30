@@ -1,0 +1,13 @@
+{{ define "sidebar" -}}
+<div class="col-2 servers text-white">
+    <h4 class="text-center">Servers</h4>
+    <ul class="server-list">
+        <li class="pb-4 pt-2">
+            <a href="#"><span class="font-weight-bold">+ Add New</span></a>
+        </li>
+        {{ range $server := .servers }}
+        <li data-key="{{ $server.key }}" class="selected">{{ $server.name }} </li>
+        {{ end }}
+    </ul>
+</div>
+{{ end }}
