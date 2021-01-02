@@ -9,7 +9,7 @@
 <body>
     <header>
         <nav class="navbar navbar-dark fixed-top bg-dark">
-            <div class="navbar-brand">/pickaxx/</div>
+            <div class="navbar-brand"><a href="/server/_default" class="link-unstyled">/pickaxx/</a></div>
             <div class="justify-content-end">
                 {{ template "button_actions" . }}
             </div>
@@ -23,8 +23,9 @@
             <div class="col-10 messages">
                 <div class="drop-zone">
                     <div class="upload-icon"></div>
-                    <p>To start a new server, drag & drop a <a
-                            href="https://www.minecraft.net/en-us/download/server">server.jar</a>.</p>
+                    <p>To start a new server, drag & drop a
+                        <a href="https://www.minecraft.net/en-us/download/server">server.jar</a>.
+                    </p>
                 </div>
                 <ul class="message-list">
                     {{ range $line := .logLines }}

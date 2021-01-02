@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"mime/multipart"
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"io/ioutil"
 	"net/http"
@@ -36,6 +38,28 @@ type ProcessHandler struct {
 	clientWriter *pickaxx.ClientManager
 }
 
+// NewProcessHandler returns a new process handler.
+func NewProcessHandler(cm *pickaxx.ClientManager) *ProcessHandler {
+	ph := ProcessHandler{
+		active:       make(map[string]*managedServer),
+		clientWriter: cm,
+	}
+
+	servers := make(map[string]*managedServer)
+	dirNames, _ := ioutil.ReadDir(dataDir)
+	for _, srvName := range dirNames {
+		mapping := &managedServer{
+			ProcessManager: minecraft.New(filepath.Join(dataDir, srvName.Name()), minecraft.DefaultPort),
+			Reporter:       &loggingReporter{writer: cm},
+		}
+		servers["_default"] = mapping
+	}
+
+	ph.active = servers
+
+	return &ph
+}
+
 // Stop will reset this handler's state, and signal to any ProcessManager's associated
 // with this handler to stop processing immediately.
 func (h *ProcessHandler) Stop() {
@@ -46,7 +70,7 @@ func (h *ProcessHandler) Stop() {
 	h.clientWriter.Close()
 }
 
-func (h *ProcessHandler) rootHandler(c *gin.Context) {
+func (h *ProcessHandler) indexList(c *gin.Context) {
 	var (
 		lines  []string
 		status string
@@ -57,19 +81,37 @@ func (h *ProcessHandler) rootHandler(c *gin.Context) {
 		lines = m.Reporter.ConsoleOutput() // set recent activity
 	}
 
-	html, err := tmpls.FindString("index.html")
+	t := template.New("index.html")
 
-	if err != nil {
-		c.AbortWithError(http.StatusInternalServerError, err)
-		return
+	for _, tf := range tmpls.List() {
+		tmpl, _ := tmpls.FindString(tf)
+		t.Parse(tmpl)
 	}
 
-	t := template.New("")
-	t.Parse(html)
+	serverList := []*ServerMetadata{}
+	dirs, _ := ioutil.ReadDir(dataDir)
+	for _, entry := range dirs {
+		if entry.IsDir() {
+			metadataPath := filepath.Join(dataDir, entry.Name(), "pickaxx.json")
+			metadataFile, err := os.Open(metadataPath)
+			if err != nil {
+				log.WithField("path", metadataPath).Warn("unable to find server metadata file")
+				continue
+			}
+			var meta ServerMetadata
+			json.NewDecoder(metadataFile).Decode(&meta)
+			meta.Key = entry.Name()
+			serverList = append(serverList, &meta)
+		}
+	}
 
-	err = t.ExecuteTemplate(c.Writer, "", gin.H{
+	xx, _ := json.MarshalIndent(serverList, "", "  ")
+	fmt.Println(string(xx))
+
+	err := t.ExecuteTemplate(c.Writer, "index.html", gin.H{
 		"logLines": lines,
 		"status":   status,
+		"servers":  serverList,
 	})
 
 	if err != nil {
@@ -109,13 +151,13 @@ func (h *ProcessHandler) startServer(c *gin.Context) {
 
 func (h *ProcessHandler) createNew(c *gin.Context) {
 	var (
-		tempFile *os.File
-		err      error
+		file    *multipart.FileHeader
+		tempDir string
+		err     error
 	)
+	log := log.WithField("action", "createNew()")
 
-	file, err := c.FormFile("file")
-
-	if err != nil {
+	if file, err = c.FormFile("file"); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "file not received"})
 		return
 	}
@@ -125,23 +167,136 @@ func (h *ProcessHandler) createNew(c *gin.Context) {
 		return
 	}
 
-	ext := filepath.Ext(file.Filename)
-	filename := strings.TrimSuffix(file.Filename, ext)
-
-	if tempFile, err = ioutil.TempFile("", fmt.Sprintf("%s-*%s", filename, ext)); err != nil {
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": "unable to write save file"})
+	if tempDir, err = ioutil.TempDir(dataDir, ".new_server_*.tmp"); err != nil {
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": "unable to create temp directory"})
 		return
 	}
 
-	if err := c.SaveUploadedFile(file, tempFile.Name()); err != nil {
+	if err := c.SaveUploadedFile(file, filepath.Join(tempDir, "server.jar")); err != nil {
 		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"err": "unable to save file"})
 		return
 	}
 
+	absPath, _ := filepath.Abs(tempDir)
+	log.WithField("dir", absPath).Info("staged new server")
+
+	placeholder := fmt.Sprintf("server #%d", fileCount(dataDir))
+
 	c.JSON(http.StatusOK, gin.H{
 		"output": "file is staged",
-		"key":    filepath.Base(tempFile.Name()),
+		"key":    filepath.Base(tempDir),
+		"name":   placeholder,
 	})
+}
+
+// ServerMetadata is serialized description of a minecraft server.
+type ServerMetadata struct {
+	Key       string    `form:"key"  json:"key"`
+	Name      string    `form:"name" json:"name"`
+	CreatedAt time.Time `form:"-"    json:"createdAt"`
+}
+
+func (h *ProcessHandler) commitNew(c *gin.Context) {
+	var (
+		reqBody ServerMetadata
+	)
+
+	log := log.WithField("action", "commitNew()")
+
+	if err := c.ShouldBind(&reqBody); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "invalid request"})
+		return
+	}
+
+	if reqBody.Key == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "key is required"})
+		return
+	}
+
+	if reqBody.Name == "" {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "name is required"})
+		return
+	}
+
+	reqBody.CreatedAt = time.Now()
+
+	// resolve staged directory
+	oldPath := filepath.Join(dataDir, reqBody.Key)
+	if _, err := os.Stat(oldPath); err != nil {
+		log.WithError(err).Error("old path not found")
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"err": "staged server not found. unable to continue.",
+		})
+		return
+	}
+
+	// update key
+
+	// write out metadata to staged dir
+	reqBody.Key = ""
+	jsonOut, _ := json.MarshalIndent(&reqBody, "", "  ")
+	if err := ioutil.WriteFile(filepath.Join(oldPath, "pickaxx.json"), jsonOut, 0644); err != nil {
+		log.WithError(err).Error("failed to write metadata")
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+			"err": "failed to write server metadata. unable to continue.",
+		})
+		return
+	}
+
+	// resolve permanent home for staged directory
+	newPath := filepath.Join(dataDir, sanitize(reqBody.Name))
+	if _, err := os.Stat(newPath); err == nil {
+		log.WithField("file", newPath).Error("new path was found ; name conflict!")
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			"err": "name conflicts with existing server",
+		})
+		return
+	}
+
+	// rename oldPath -> newPath
+	if err := os.Rename(oldPath, newPath); err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
+			"err": "unable to commit change",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"url": fmt.Sprintf("/server/%s", sanitize(reqBody.Name)),
+	})
+}
+
+func (h *ProcessHandler) cancelNew(c *gin.Context) {
+	var (
+		key string
+		err error
+	)
+
+	if key = c.PostForm("key"); key == "" {
+		log.Error("key is blank")
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "no server found"})
+		return
+	}
+
+	stagingDir, err := findStagedServerPath(dataDir, key)
+	stagingDir = filepath.Join(dataDir, stagingDir)
+
+	if err != nil {
+		log.WithField("key", key).Error("key does not point to a staged server")
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": "invalid key"})
+		return
+	}
+
+	log.Debugf("removing staging directory.. %s", stagingDir)
+
+	if err := os.Remove(filepath.Join(stagingDir, "server.jar")); err != nil {
+		log.WithError(err).Warn("server.jar missing")
+	}
+
+	if err := os.Remove(stagingDir); err != nil {
+		log.WithError(err).Error("error on delete")
+		c.AbortWithStatusJSON(http.StatusConflict, gin.H{"err": "unable to clear staged directory"})
+	}
 }
 
 func (h *ProcessHandler) stopServer(c *gin.Context) {
@@ -156,7 +311,6 @@ func (h *ProcessHandler) stopServer(c *gin.Context) {
 	if err := manager.Stop(); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"err": err.Error()})
 	}
-
 }
 
 func (h *ProcessHandler) sendCommand(c *gin.Context) {
@@ -200,16 +354,19 @@ func webSocketHandler(newConnFunc func(*websocket.Conn)) gin.HandlerFunc {
 
 func resolveKey(p *gin.Params) string {
 	key := p.ByName("key")
+	return sanitize(key)
+}
 
-	key = strings.ReplaceAll(key, " ", "_")
+func sanitize(str string) string {
+	str = strings.ReplaceAll(str, " ", "_")
 	reg := regexp.MustCompile("[^a-zA-Z0-9_]+")
-	key = reg.ReplaceAllString(key, "")
+	str = reg.ReplaceAllString(str, "")
 
-	if key == "" {
-		key = "_default"
+	if str == "" {
+		str = "_default"
 	}
 
-	return key
+	return str
 }
 
 func (h *ProcessHandler) resolveServer(c *gin.Context) (*managedServer, error) {
@@ -234,4 +391,36 @@ type rawData struct {
 
 func (d rawData) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]string{"output": d.Value})
+}
+
+func fileCount(path string) int {
+	files, _ := ioutil.ReadDir(path)
+	return len(files)
+}
+
+func findStagedServerPath(path, name string) (string, error) {
+	const nullPath = "._" // return a sentinel value instead of empty path
+
+	// strip any path prefix from name
+	if name != filepath.Base(name) {
+		return nullPath, errors.New("name can not contain path")
+	}
+
+	files, err := ioutil.ReadDir(path)
+
+	if err != nil {
+		return nullPath, err
+	}
+
+	for _, f := range files {
+		if !f.IsDir() || !strings.HasPrefix(f.Name(), ".new_server_") {
+			continue
+		}
+
+		if filepath.Base(f.Name()) == name {
+			return f.Name(), nil
+		}
+	}
+
+	return nullPath, errors.New("not found")
 }

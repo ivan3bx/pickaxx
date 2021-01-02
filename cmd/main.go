@@ -40,20 +40,20 @@ func main() {
 	e := newRouter()
 
 	// routes: process handling
-	ph := ProcessHandler{
-		active:       make(map[string]*managedServer),
-		clientWriter: &pickaxx.ClientManager{},
-	}
+	clientManager := pickaxx.ClientManager{}
+	ph := NewProcessHandler(&clientManager)
 
 	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/server/_default") })
-	e.GET("/server/:key", ph.rootHandler)
+	e.GET("/server/:key", ph.indexList)
 	e.POST("/server", ph.createNew)
+	e.PUT("/server", ph.commitNew)
+	e.DELETE("/server", ph.cancelNew)
 	e.POST("/server/:key/start", ph.startServer)
 	e.POST("/server/:key/stop", ph.stopServer)
 	e.POST("/server/:key/send", ph.sendCommand)
 
 	// routes: client handling
-	e.GET("/ws", webSocketHandler(ph.clientWriter.AddClient))
+	e.GET("/ws", webSocketHandler(clientManager.AddClient))
 
 	// Start the web server
 	srv := startWebServer(e)

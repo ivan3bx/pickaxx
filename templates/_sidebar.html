@@ -6,7 +6,7 @@
             <a href="#"><span class="font-weight-bold">+ Add New</span></a>
         </li>
         {{ range $server := .servers }}
-        <li data-key="{{ $server.key }}" class="selected">{{ $server.name }} </li>
+        <li data-key="{{ $server.Key }}" class="selected">{{ $server.Name }} </li>
         {{ end }}
     </ul>
 </div>

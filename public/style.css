@@ -6,6 +6,11 @@ body > .container {
     font-family: 'Courier New', Courier, monospace;
 }
 
+.link-unstyled, .link-unstyled:link, .link-unstyled:hover {
+    color: inherit;
+    text-decoration: inherit;
+}
+
 .header {
     color: #333;
 }
