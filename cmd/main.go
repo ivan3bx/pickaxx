@@ -3,14 +3,12 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
-	"github.com/gin-gonic/gin"
 	"github.com/ivan3bx/pickaxx"
 )
 
@@ -43,13 +41,16 @@ func main() {
 	clientManager := pickaxx.ClientManager{}
 	ph := NewProcessHandler(&clientManager)
 
-	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusFound, "/server/_default") })
-	e.GET("/server/:key", ph.indexList)
-	e.POST("/server", ph.createNew)
-	e.PUT("/server", ph.commitNew)
-	e.DELETE("/server", ph.cancelNew)
-	e.POST("/server/:key/start", ph.startServer)
-	e.POST("/server/:key/stop", ph.stopServer)
+	// CRUD operations
+	e.GET("/", ph.index)
+	e.GET("/server/:key", ph.show)
+	e.POST("/server", ph.create)
+	e.DELETE("/server", ph.delete)
+	e.PUT("/server", ph.commit)
+
+	// State management
+	e.POST("/server/:key/start", ph.start)
+	e.POST("/server/:key/stop", ph.stop)
 	e.POST("/server/:key/send", ph.sendCommand)
 
 	// routes: client handling

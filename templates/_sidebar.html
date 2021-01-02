@@ -6,7 +6,9 @@
             <a href="#"><span class="font-weight-bold">+ Add New</span></a>
         </li>
         {{ range $server := .servers }}
-        <li data-key="{{ $server.Key }}" class="selected">{{ $server.Name }} </li>
+        <li data-key="{{ $server.Key }}" class="{{ if eq $server.Key $.selected }}selected{{ end }}">
+            <a class="link-unstyled" href="/server/{{ $server.Key }}">{{ $server.Name }}</a>
+        </li>
         {{ end }}
     </ul>
 </div>

@@ -48,11 +48,12 @@ func NewProcessHandler(cm *pickaxx.ClientManager) *ProcessHandler {
 	servers := make(map[string]*managedServer)
 	dirNames, _ := ioutil.ReadDir(dataDir)
 	for _, srvName := range dirNames {
+		key := srvName.Name()
 		mapping := &managedServer{
 			ProcessManager: minecraft.New(filepath.Join(dataDir, srvName.Name()), minecraft.DefaultPort),
 			Reporter:       &loggingReporter{writer: cm},
 		}
-		servers["_default"] = mapping
+		servers[key] = mapping
 	}
 
 	ph.active = servers
@@ -70,57 +71,60 @@ func (h *ProcessHandler) Stop() {
 	h.clientWriter.Close()
 }
 
-func (h *ProcessHandler) indexList(c *gin.Context) {
+func (h *ProcessHandler) index(c *gin.Context) {
+	var (
+		key string
+	)
+	serverList := serverList(dataDir)
+	if len(serverList) > 0 {
+		key = serverList[0].Key
+	}
+
+	renderTemplate(c, "index.html", gin.H{
+		"logLines": []string{},
+		"status":   "Unknown",
+		"servers":  serverList,
+		"selected": key,
+	})
+}
+
+func (h *ProcessHandler) newServer(c *gin.Context) {
+	renderTemplate(c, "index.html", gin.H{
+		"logLines": []string{},
+		"status":   "Unknown",
+		"servers":  serverList(dataDir),
+		"selected": "_default", // TODO: none should be selected
+	})
+
+}
+
+func (h *ProcessHandler) show(c *gin.Context) {
 	var (
 		lines  []string
 		status string
 	)
 
-	if m, err := h.resolveServer(c); err == nil && m.Running() {
+	if resolveKey(&c.Params) == "new" {
+		h.newServer(c)
+		return
+	}
+
+	m, err := h.resolveServer(c)
+
+	if err == nil && m.Running() {
 		status = "Running"                 // set a status
 		lines = m.Reporter.ConsoleOutput() // set recent activity
 	}
 
-	t := template.New("index.html")
-
-	for _, tf := range tmpls.List() {
-		tmpl, _ := tmpls.FindString(tf)
-		t.Parse(tmpl)
-	}
-
-	serverList := []*ServerMetadata{}
-	dirs, _ := ioutil.ReadDir(dataDir)
-	for _, entry := range dirs {
-		if entry.IsDir() {
-			metadataPath := filepath.Join(dataDir, entry.Name(), "pickaxx.json")
-			metadataFile, err := os.Open(metadataPath)
-			if err != nil {
-				log.WithField("path", metadataPath).Warn("unable to find server metadata file")
-				continue
-			}
-			var meta ServerMetadata
-			json.NewDecoder(metadataFile).Decode(&meta)
-			meta.Key = entry.Name()
-			serverList = append(serverList, &meta)
-		}
-	}
-
-	xx, _ := json.MarshalIndent(serverList, "", "  ")
-	fmt.Println(string(xx))
-
-	err := t.ExecuteTemplate(c.Writer, "index.html", gin.H{
+	renderTemplate(c, "index.html", gin.H{
 		"logLines": lines,
 		"status":   status,
-		"servers":  serverList,
+		"servers":  serverList(dataDir),
+		"selected": resolveKey(&c.Params),
 	})
-
-	if err != nil {
-		c.AbortWithError(http.StatusInternalServerError, err)
-		return
-	}
 }
 
-func (h *ProcessHandler) startServer(c *gin.Context) {
+func (h *ProcessHandler) start(c *gin.Context) {
 
 	manager, err := h.resolveServer(c)
 
@@ -149,7 +153,7 @@ func (h *ProcessHandler) startServer(c *gin.Context) {
 	}
 }
 
-func (h *ProcessHandler) createNew(c *gin.Context) {
+func (h *ProcessHandler) create(c *gin.Context) {
 	var (
 		file    *multipart.FileHeader
 		tempDir string
@@ -196,7 +200,7 @@ type ServerMetadata struct {
 	CreatedAt time.Time `form:"-"    json:"createdAt"`
 }
 
-func (h *ProcessHandler) commitNew(c *gin.Context) {
+func (h *ProcessHandler) commit(c *gin.Context) {
 	var (
 		reqBody ServerMetadata
 	)
@@ -266,7 +270,7 @@ func (h *ProcessHandler) commitNew(c *gin.Context) {
 	})
 }
 
-func (h *ProcessHandler) cancelNew(c *gin.Context) {
+func (h *ProcessHandler) delete(c *gin.Context) {
 	var (
 		key string
 		err error
@@ -299,7 +303,7 @@ func (h *ProcessHandler) cancelNew(c *gin.Context) {
 	}
 }
 
-func (h *ProcessHandler) stopServer(c *gin.Context) {
+func (h *ProcessHandler) stop(c *gin.Context) {
 
 	manager, err := h.resolveServer(c)
 
@@ -423,4 +427,38 @@ func findStagedServerPath(path, name string) (string, error) {
 	}
 
 	return nullPath, errors.New("not found")
+}
+
+func renderTemplate(c *gin.Context, name string, params map[string]interface{}) {
+	t := template.New(name)
+
+	for _, tf := range tmpls.List() {
+		tmpl, _ := tmpls.FindString(tf)
+		t.Parse(tmpl)
+	}
+
+	if err := t.ExecuteTemplate(c.Writer, name, params); err != nil {
+		c.AbortWithError(http.StatusInternalServerError, err)
+		return
+	}
+}
+
+func serverList(dataDir string) []*ServerMetadata {
+	serverList := []*ServerMetadata{}
+	dirs, _ := ioutil.ReadDir(dataDir)
+	for _, entry := range dirs {
+		if entry.IsDir() {
+			metadataPath := filepath.Join(dataDir, entry.Name(), "pickaxx.json")
+			metadataFile, err := os.Open(metadataPath)
+			if err != nil {
+				log.WithField("path", metadataPath).Warn("unable to find server metadata file")
+				continue
+			}
+			var meta ServerMetadata
+			json.NewDecoder(metadataFile).Decode(&meta)
+			meta.Key = entry.Name()
+			serverList = append(serverList, &meta)
+		}
+	}
+	return serverList
 }
