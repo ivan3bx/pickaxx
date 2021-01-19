@@ -7,7 +7,7 @@ COPY go.* /root/build/
 RUN go mod download
 
 COPY . /root/build/
-RUN go test -race ./...
+RUN go test ./...
 RUN packr2
 RUN CGO_ENABLED=0 GOOS=linux go build -o app cmd/*.go
 
