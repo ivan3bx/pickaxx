@@ -16,7 +16,12 @@ ifneq (,$(shell which staticcheck))
 else
 	@echo "skipping go check"
 endif
+
+ifeq (arm,$(shell go env GOARCH))
+	go test ./...
+else
 	go test -race ./...
+endif
 
 list:
 	@$(MAKE) -rpn | sed -n -e '/^$$/ { n ; /^[^ .#][^ ]*:/ { s/:.*$$// ; p ; } ; }' | egrep --color '^[^ ]*'
