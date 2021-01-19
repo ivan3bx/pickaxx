@@ -12,7 +12,7 @@ clean:
 
 test:
 ifneq (,$(shell which staticcheck))
-	$(shell staticcheck ./...)
+	@staticcheck ./... 2>/dev/null
 else
 	@echo "skipping go check"
 endif
