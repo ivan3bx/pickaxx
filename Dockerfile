@@ -11,9 +11,10 @@ RUN go test -race ./...
 RUN packr2
 RUN CGO_ENABLED=0 GOOS=linux go build -o app cmd/*.go
 
-FROM alpine:latest  
-RUN apk --no-cache add ca-certificates
+# Following does not work on rpi
+#FROM alpine:latest  
+#RUN apk --no-cache add ca-certificates
 
-WORKDIR /root/
-COPY --from=0 /root/build/app .
-CMD ["./app"]  
+#WORKDIR /root/
+#COPY --from=0 /root/build/app .
+#CMD ["./app"]  
