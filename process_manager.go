@@ -20,7 +20,8 @@ type ConsoleData interface {
 // ProcessManager can manage and interact with a process.
 type ProcessManager interface {
 
-	// Start will connect & initiate the underlying process.
+	// Start will execute an underlying process. Monitors may be
+	// provided and will receive a stream of activity data.
 	Start() (<-chan Data, error)
 
 	// Stop will halt the process and release any resources.
@@ -31,4 +32,14 @@ type ProcessManager interface {
 
 	// Submit will send a command to the underlying process.
 	Submit(command string) error
+}
+
+// Reporter reads from a Data channel and reports on it.
+type Reporter interface {
+	Report(<-chan Data)
+}
+
+// Writer can write out Data.
+type Writer interface {
+	Write(Data)
 }

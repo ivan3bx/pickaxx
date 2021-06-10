@@ -21,7 +21,7 @@ function sendCommand(event) {
     return;
   }
 
-  const xhr = ajaxRequest('POST', event.currentTarget.action);
+  const xhr = ajaxRequest('POST', '/server/_default/send');
 
   xhr.onload = () => {
     inputBox.value = '';
@@ -40,8 +40,8 @@ const app = {
 
     // setup initial state
     inputForm.addEventListener('submit', sendCommand);
-    startButton.addEventListener('click', () => { ajaxRequest('POST', '/start').send(); });
-    stopButton.addEventListener('click', () => { ajaxRequest('POST', '/stop').send(); });
+    startButton.addEventListener('click', () => { ajaxRequest('POST', '/server/_default/start').send(); });
+    stopButton.addEventListener('click', () => { ajaxRequest('POST', '/server/_default/stop').send(); });
 
     fileDrop.init();
 

@@ -1,0 +1,6 @@
+{{ define "button_actions" -}}
+<input id="startButton" type="button" class="btn btn-primary" value="Start Server"
+       {{- if (eq .status "Running" ) }} disabled {{- end }}>
+<input id="stopButton" type="button" class="btn btn-danger" value="Stop Server"
+       {{- if (eq .status "Stopped" ) }} disabled {{- end }}>
+{{- end }}

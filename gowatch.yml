@@ -4,6 +4,9 @@ build_pkg: ./cmd
 # path to build
 output: dist/pickaxx_dev
 
+cmd_args:
+    - -d=./dist/testdata
+
 # exclude changes in these paths from triggering build
 excluded_paths:
     - testserver

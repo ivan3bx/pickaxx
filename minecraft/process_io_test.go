@@ -10,7 +10,7 @@ import (
 )
 
 func TestConsoleOutput(t *testing.T) {
-	d := consoleOutput{"sample text"}
+	d := consoleEvent{"sample text"}
 
 	bo, _ := json.Marshal(&d)
 

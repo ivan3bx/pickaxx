@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -8,41 +10,55 @@ import (
 	"github.com/apex/log"
 	"github.com/apex/log/handlers/cli"
 	"github.com/ivan3bx/pickaxx"
-	"github.com/ivan3bx/pickaxx/minecraft"
 )
 
-func main() {
-	var (
-		clientMgr  *pickaxx.ClientManager = &pickaxx.ClientManager{}
-		processMgr pickaxx.ProcessManager = minecraft.New(minecraft.DefaultPort)
-	)
+const defaultLogLevel = log.InfoLevel
 
-	configureLogging(log.DebugLevel)
+var (
+	dataDir string
+	verbose bool
+	version string // version is only set on release
+)
+
+func init() {
+	flag.StringVar(&dataDir, "d", "./pxdata", "directory to store server data")
+	flag.BoolVar(&verbose, "v", false, "verbose logging")
+}
+
+func main() {
+	flag.Parse()
+
+	configureLogging()
+	configureDataDirectory()
+
+	if version != "" {
+		log.Infof("Pickaxx: %s ⛏", version)
+	}
 
 	e := newRouter()
 
 	// routes: process handling
-	ph := processHandler{
-		manager: processMgr,
-		writer:  clientMgr,
-	}
-	{
-		e.GET("/", ph.rootHandler)
-		e.POST("/start", ph.startServerHandler)
-		e.POST("/stop", ph.stopServerHandler)
-		e.POST("/server", ph.createServerHandler)
-		e.POST("/send", ph.sendHandler)
+	clientManager := pickaxx.ClientManager{}
+	ph := NewProcessHandler(&clientManager)
 
-	}
+	// CRUD operations
+	e.GET("/", ph.index)
+	e.GET("/server/:key", ph.show)
+	e.POST("/server", ph.create)
+	e.DELETE("/server", ph.delete)
+	e.PUT("/server", ph.commit)
+
+	// State management
+	e.POST("/server/:key/start", ph.start)
+	e.POST("/server/:key/stop", ph.stop)
+	e.POST("/server/:key/send", ph.sendCommand)
 
 	// routes: client handling
-	ch := clientHandler{clientMgr}
-	{
-		e.GET("/ws", ch.webSocketHandler)
-	}
+	e.GET("/ws", webSocketHandler(clientManager.AddClient))
 
 	// Start the web server
 	srv := startWebServer(e)
+	log.Infof("Server running at: http://%s", srv.Addr)
 
 	// shutdown on interrupt
 	quit := make(chan os.Signal, 1)
@@ -52,21 +68,26 @@ func main() {
 	log.Debug("shutdown initiated")
 	{
 		stopWebServer(srv)
-		stopProcesses(processMgr)
-		stopClientManager(clientMgr)
+		ph.Stop()
 	}
 	log.Info("shutdown complete")
 }
 
-func configureLogging(level log.Level) {
+func configureLogging() {
+	level := defaultLogLevel
+
+	if verbose {
+		level = log.DebugLevel
+	}
+
 	log.SetLevel(level)
 	log.SetHandler(cli.Default)
 }
 
-func stopProcesses(m pickaxx.ProcessManager) {
-	m.Stop()
-}
-
-func stopClientManager(cl *pickaxx.ClientManager) {
-	cl.Close()
+func configureDataDirectory() {
+	fmt.Println("Making dir:", dataDir)
+	err := os.Mkdir(dataDir, 0755)
+	if err != nil && os.IsNotExist(err) {
+		log.WithError(err).Fatalf("unable to create directory: %s", dataDir)
+	}
 }

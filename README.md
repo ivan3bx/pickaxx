@@ -25,9 +25,8 @@ GO111MODULE=off go get -u github.com/gobuffalo/packr/v2/packr2
 wget -O /tmp/goreleaser_amd64.deb https://github.com/goreleaser/goreleaser/releases/download/v0.154.0/goreleaser_amd64.deb
 sudo dpkg -i /tmp/goreleaser_amd64.deb
 ```
-2. Until this tool can bootstrap new Minecraft instances on it's own, manually download `server.jar` from Minecraft's site (see below), and copy this into the path `testserver/server.jar`.
-3. Run tests (or use `make test`).
-4. Run `make` which will start the server. Load http://localhost:8080
+2. Run tests (or use `make test`).
+3. Run `make` which will start the server. Load http://localhost:8080
 
 ## Dependencies
 

@@ -5,6 +5,8 @@ const dropZone = document.querySelector('.drop-zone');
 const progressBar = document.querySelector('div[role=progressbar]');
 const newServerModal = document.querySelector('#new-server-modal');
 const saveButton = document.querySelector('#new-server-modal .btn-primary');
+const cancelButton = document.querySelector('#new-server-modal .btn-secondary');
+const formEl = newServerModal.querySelector('form');
 const serverNameField = document.querySelector('#server-name');
 
 //
@@ -78,12 +80,7 @@ function dropStage(e) {
 
   $(newServerModal).modal();
 
-  //
-  // upload to server!
-  //
-
   // see https://code-boxx.com/simple-drag-and-drop-file-upload/
-
   const data = new FormData();
   data.append('file', file);
 
@@ -93,7 +90,9 @@ function dropStage(e) {
 
   // XHR - on successful load
   xhr.onload = () => {
-    if (xhr.readyState === xhr.DONE && (xhr.status > 299)) {
+    if (xhr.readyState !== xhr.DONE) { return; }
+
+    if (xhr.status > 299) {
       console.log(`Error: ${xhr.responseText}`);
       return;
     }
@@ -101,10 +100,17 @@ function dropStage(e) {
     // success!
     const xhrRsp = JSON.parse(xhr.responseText);
 
-    dropZone.innerHTML += `<div>${xhr.responseText}</div>`;
-    serverNameField.value = xhrRsp.key;
+    // set placeholder name
+    serverNameField.value = xhrRsp.name;
+
+    // set button state
     saveButton.disabled = false;
-    saveButton.dataset.key = xhrRsp.key;
+    newServerModal.dataset.key = xhrRsp.key; // used to commit change
+
+    setTimeout(() => {
+      progressBar.classList.add('bg-success');
+      progressBar.classList.remove('progress-bar-animated', 'progress-bar-striped');
+    }, 800);
 
     console.log(xhr.responseText);
   };
@@ -133,10 +139,54 @@ function dropStage(e) {
 }
 
 //
-// dropCommit - user commits creation of new server.
+// dropCancel - user cancels creation of a new server
+//
+function dropCancel(e) {
+  const { key } = newServerModal.dataset;
+
+  if (key === 'undefined') {
+    return false;
+  }
+
+  const data = new FormData();
+  data.append('key', key);
+
+  const xhr = new XMLHttpRequest();
+
+  // fire & forget
+  xhr.open('DELETE', '/server');
+  xhr.send(data);
+}
+
+//
+// dropCommit - user commits creation of new server
+//
 function dropCommit(e) {
-  const { key } = saveButton.dataset;
-  console.log("TODO: call 'commit' with key:" + key);
+  const { key } = newServerModal.dataset;
+
+  const data = new FormData();
+  data.append('key', key);
+  data.append('name', serverNameField.value);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('PUT', '/server');
+  saveButton.disabled = true;
+
+  // XHR - on successful load
+  xhr.onload = () => {
+    if (xhr.readyState !== xhr.DONE) { return; }
+
+    if (xhr.status > 299) {
+      dropZone.innerHTML += `<div>Error: ${xhr.responseText}</div>`;
+      return;
+    }
+
+    // success! redirect to new server
+    const xhrRsp = JSON.parse(xhr.responseText);
+    window.location.href = xhrRsp.url;
+  };
+
+  xhr.send(data);
 }
 
 export function init() {
@@ -145,7 +195,9 @@ export function init() {
   dropZone.addEventListener('dragover', dropOver);
   dropZone.addEventListener('drop', dropStage);
 
+  formEl.addEventListener('submit', dropCommit);
   saveButton.addEventListener('click', dropCommit);
+  cancelButton.addEventListener('click', dropCancel);
 
   // set focus for the server modal
   $(newServerModal).on('shown.bs.modal', () => {

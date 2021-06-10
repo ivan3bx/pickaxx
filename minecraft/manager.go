@@ -26,9 +26,6 @@ const (
 
 	// DefaultPort is the default minecraft server port
 	DefaultPort = 25565
-
-	// DefaultWorkingDir is the default working directory
-	DefaultWorkingDir = "testserver"
 )
 
 // DefaultCommand is the name of the executable.
@@ -38,9 +35,10 @@ var DefaultCommand = []string{"java", MaxMem, MinMem, "-jar", JarFile, "nogui"}
 var ErrNoProcess = errors.New("no process running")
 
 // New creates a new process manager for an instance of Minecraft server.
-func New(port int) pickaxx.ProcessManager {
+func New(dataDir string, port int) pickaxx.ProcessManager {
 	return &serverManager{
-		Port: port,
+		WorkingDir: dataDir,
+		Port:       port,
 	}
 }
 
@@ -82,7 +80,7 @@ func (m *serverManager) Start() (<-chan pickaxx.Data, error) {
 	}
 
 	if m.WorkingDir == "" {
-		m.WorkingDir = DefaultWorkingDir
+		return nil, fmt.Errorf("no working directory configured")
 	}
 
 	if _, err := os.Stat(m.WorkingDir); err != nil {
@@ -143,7 +141,7 @@ func (m *serverManager) Running() bool {
 }
 
 // eventLoop processes state transitions.
-func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
+func eventLoop(m *serverManager, activity chan<- pickaxx.Data) {
 	var (
 		log = log.WithField("action", "eventLoop")
 		wg  = sync.WaitGroup{}
@@ -161,7 +159,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 		wg.Wait() // wait for any child routines to quit
 
 		log.Debug("closing activity channel")
-		close(out)
+		close(activity)
 	}()
 
 	for {
@@ -169,7 +167,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 
 		switch newState {
 		case Starting:
-			out <- consoleOutput{"Server is starting"}
+			activity <- consoleEvent{"Server is starting"}
 
 			if _, err = startServer(mainCtx, m); err != nil {
 				log.WithError(err).Error("failed to start server")
@@ -178,7 +176,7 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				pipeOutput(m.cmdOut, out)
+				pipeOutput(m.cmdOut, activity)
 			}()
 
 			// start liveness probe
@@ -186,20 +184,20 @@ func eventLoop(m *serverManager, out chan<- pickaxx.Data) {
 			go func() {
 				defer wg.Done()
 				if err := checkPort(portCheckCtx, m.Port, time.Second*15, time.Second*2); err != nil {
-					out <- consoleOutput{"Process not responding. Initiating shutdown."}
+					activity <- consoleEvent{"Process not responding. Initiating shutdown."}
 					m.Stop()
 				}
 			}()
 		case Stopping:
-			out <- consoleOutput{"Shutting down.."}
+			activity <- consoleEvent{"Shutting down.."}
 			stopPortCheck()
 			stopServer(mainCtx, m)
 		case Stopped:
-			out <- consoleOutput{"Shutdown complete. Thanks for playing."}
+			activity <- consoleEvent{"Shutdown complete. Thanks for playing."}
 		}
 
 		m.notifier.Notify(newState)
-		out <- stateChangeEvent{newState}
+		activity <- stateChangeEvent{newState}
 
 		if newState == Stopped {
 			return

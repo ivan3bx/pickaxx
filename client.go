@@ -2,7 +2,7 @@ package pickaxx
 
 import (
 	"encoding/json"
-	"io"
+
 	"sync"
 	"time"
 
@@ -31,8 +31,6 @@ func (wc *websocketClient) Write(data []byte) error {
 
 	return err
 }
-
-var _ io.Writer = &ClientManager{}
 
 // ClientManager is a collection of clients
 type ClientManager struct {
@@ -88,19 +86,11 @@ func (c *ClientManager) AddClient(conn *websocket.Conn) {
 	}()
 }
 
-// Write will send data down a channel to be sent to clients. This
-// operation must write to a channel, as writes to an underlying
-// websocket can not happen concurrently.
-func (c *ClientManager) Write(data []byte) (int, error) {
+func (c *ClientManager) Write(data Data) {
+	bo, _ := json.Marshal(data)
 	holder := map[string]interface{}{}
-
-	// Send well-formed JSON as-is; wrap anything else as 'output'
-	if err := json.Unmarshal(data, &holder); err != nil {
-		holder = map[string]interface{}{"output": string(data)}
-	}
-
+	json.Unmarshal(bo, &holder)
 	c.output <- holder
-	return len(data), nil
 }
 
 func (c *ClientManager) broadcast(data map[string]interface{}) error {
