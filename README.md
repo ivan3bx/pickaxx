@@ -2,19 +2,22 @@
 
 A standalone web console for managing a Minecraft server instance.
 
+> **Warning**
+>
+> * This project is archived.
+> * The code demonstrates a method of safely managing the lifecycle of an external process (in this case, managing Minecraft server instances running as Java processes).
+> * It can start an existing server and send/receive output through a chat-like interface.
+> * Authentication is not supported, limiting it to running on a local network only.
+
+----
+
 ![Screenshot](https://user-images.githubusercontent.com/179345/101236138-365c2400-3694-11eb-8337-8f432a09ea6f.png "Screenshot #1")
 
-The goals of this project are as follows:
+The goals of this project were as follows:
 
 * Minimal configuration, sane defaults (drop a server into the tool and go)
 * Single binary, small memory footprint
 * Basic authentication
-
-## Current state
-
-* **In development**. It can start an existing minecraft server and send/receive output, but not much else.
-* It can not yet bootstrap new server instances (i.e. drag and drop).
-* It does not handle any authentication yet, making it not yet able to run safely on a public server.
 
 ## Developer Setup
 
